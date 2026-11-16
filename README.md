@@ -33,6 +33,8 @@ curl http://127.0.0.1:8000/healthz
 Sobe `db` (Postgres, sem porta publicada), `migrate` (`alembic upgrade head`) e `api` (em `127.0.0.1:8000`).
 Se `secrets/token.json` não existir, a API sobe mesmo assim e loga o erro do watch.
 
+> Se o dono de `secrets/` no host não for UID 1000, defina `APP_UID`/`APP_GID` no `.env` (`id -u`, `id -g`); senão a API não lê o `token.json`.
+
 > A API roda com **1 worker** de propósito: o lock do sync e o agendador de renovação vivem no processo.
 
 ## Deploy na VPS
