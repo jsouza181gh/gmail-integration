@@ -1,0 +1,11 @@
+.venv
+secrets
+.env
+credentials.json
+token.json
+emails.db*
+emails.json
+__pycache__
+docs
+tests
+.git
