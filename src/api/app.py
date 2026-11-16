@@ -14,6 +14,7 @@ from typing import Callable
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 
+from src.api.log_filters import install_access_log_filter
 from src.utils.console import log
 
 
@@ -53,6 +54,8 @@ def create_app(
     renew_interval_s: float = 86400,
     retry_s: float = 3600,
 ) -> FastAPI:
+    install_access_log_filter()
+
     @asynccontextmanager
     async def lifespan(app):
         if on_startup:
