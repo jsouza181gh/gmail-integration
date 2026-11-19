@@ -118,6 +118,12 @@ def _status(deps: ApiDeps) -> BackfillStatus:
             ) or 0
 
         hour, day = finished_since(timedelta(hours=1)), finished_since(timedelta(days=1))
+        first_today = s.scalar(
+            select(func.min(Job.finished_at)).where(
+                Job.kind == "backfill_page", Job.status == "done", Job.run_id == p.run_id,
+                Job.finished_at > now - timedelta(days=1),
+            )
+        )
         next_at = s.scalar(
             select(func.min(Job.run_after)).where(
                 Job.kind == "backfill_page", Job.status == "queued", Job.run_id == p.run_id
@@ -129,7 +135,11 @@ def _status(deps: ApiDeps) -> BackfillStatus:
     if total:
         percent = round(min(100.0, 100.0 * p.emails / total), 1)
         remaining_pages = max(0, total - p.emails) / PAGE_SIZE
-        rate = day / 24 if day else float(hour)
+        # pages per hour over the stretch actually worked today (>= 1 h)
+        if first_today is not None and first_today.tzinfo is None:
+            first_today = first_today.replace(tzinfo=now.tzinfo)
+        span_h = max(1.0, (now - first_today).total_seconds() / 3600) if first_today else 24.0
+        rate = day / span_h if day else float(hour)
         eta = round(remaining_pages / rate, 1) if rate and not p.fetch_done else None
     if next_at is not None and next_at.tzinfo is None:
         next_at = next_at.replace(tzinfo=now.tzinfo)

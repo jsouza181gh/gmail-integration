@@ -57,8 +57,8 @@ def test_backfill_status_percent_eta_and_pause(api: Api) -> None:
     assert st["progress"]["emails"] == 250 and st["mailbox_total"] == 1000
     assert st["percent"] == 25.0
     assert (st["pages_last_hour"], st["pages_last_day"]) == (4, 10)
-    # 750 emails left = 30 pages at 10 pages/24h
-    assert st["eta_hours"] == pytest.approx(72.0)
+    # 750 emails left = 30 pages; 10 pages over the 5 h actually worked = 2/h
+    assert st["eta_hours"] == pytest.approx(15.0)
     assert st["deferred_until"] is not None
 
 
