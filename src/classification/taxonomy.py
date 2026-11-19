@@ -1,4 +1,5 @@
 """Typed taxonomy: categories and flags the classifier works with."""
+from datetime import date
 from typing import Literal, Self, get_args
 
 from pydantic import model_validator
@@ -48,3 +49,15 @@ class Taxonomy(Schema):
 class PreferenceSeed(Schema):
     scope: str
     text: str
+
+
+class Classification(Schema):
+    """Outcome of classifying one email against one taxonomy version."""
+
+    category: str
+    reason: str
+    is_relevant: bool
+    deadline: date | None
+    has_document: bool
+    ephemeral: bool
+    category_set_id: int

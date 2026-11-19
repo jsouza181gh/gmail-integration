@@ -1,5 +1,8 @@
+from datetime import date
+
 import pytest
 
+from src.classification.classifier import Classification
 from src.db.store import Store
 from src.gmail.messages import MessageSummary
 
@@ -44,10 +47,18 @@ def test_pending_orders_by_attempts(store):
 def test_save_classifications_clears_pending(store):
     run = store.get_or_create_run("q")
     store.ingest(run.id, ["a"], [_email("a")])
-    store.save_classifications([("a", "Urgente", "porque")])
+    store.bump_attempts(["a"], "boom")
+    store.save_classifications({"a": Classification(
+        category="Estudos", reason="porque", is_relevant=True, deadline=date(2026, 11, 29),
+        has_document=False, ephemeral=True, category_set_id=7,
+    )})
     assert store.count_pending(run.id) == 0
     row = store.report_rows(run.id)[0]
-    assert (row.category, row.reason, row.sender) == ("Urgente", "porque", "a@x")
+    assert (row.category, row.reason, row.sender) == ("Estudos", "porque", "a@x")
+    assert (row.is_relevant, row.deadline, row.has_document, row.ephemeral) == (
+        True, date(2026, 11, 29), False, True,
+    )
+    assert row.category_set_id == 7 and row.last_error is None
 
 
 def test_give_up_marks_nao_classificado(store):

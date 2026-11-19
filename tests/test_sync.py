@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from src.classification.classifier import Abort
+from src.classification.classifier import Abort, Classification
 from src.db.store import Store
 from src.services.sync import WEBHOOK_QUERY, SyncCoordinator, sync_inbox
 from tests.fakes import FakeService, http_error
@@ -18,7 +18,13 @@ class FakeClassifier:
         self.calls += 1
         if self.error:
             raise self.error
-        return {r.id: ("Outros", "teste") for r in rows}
+        return {
+            r.id: Classification(
+                category="Social", reason="teste", is_relevant=False, deadline=None,
+                has_document=False, ephemeral=False, category_set_id=1,
+            )
+            for r in rows
+        }
 
 
 def message(mid):
@@ -74,7 +80,7 @@ def test_ingests_and_classifies_new_message(store):
     assert result == {"ingested": 2, "pending": 0}
     rows = store.report_rows(run_of(store))
     assert {r.id for r in rows} == {"m1", "m2"}
-    assert all(r.category == "Outros" for r in rows)
+    assert all(r.category == "Social" for r in rows)
     assert rows[0].sender.endswith("@x.com")
     assert store.get_watch_state().history_id == "20"
     name, kw = svc.calls[0]
@@ -129,7 +135,7 @@ def test_llm_abort_keeps_pending_and_advances_cursor(store):
     empty = make_service(lambda **kw: history_response([], "20"))
     second = sync_inbox(store, empty, FakeClassifier())
     assert second == {"ingested": 0, "pending": 0}
-    assert store.report_rows(run_of(store))[0].category == "Outros"
+    assert store.report_rows(run_of(store))[0].category == "Social"
 
 
 def test_sync_without_watch_state_raises(session_factory):

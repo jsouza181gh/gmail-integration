@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.classification.taxonomy import (
     CategoryDef,
+    Classification,
     FlagDef,
     PreferenceSeed,
     Taxonomy,
@@ -165,14 +166,22 @@ class Store:
             )
             return [EmailRow.model_validate(r) for r in rows]
 
-    def save_classifications(self, results: Iterable[tuple[str, str, str]]) -> None:
-        """results: (email_id, category, reason)."""
+    def save_classifications(self, results: Mapping[str, Classification]) -> None:
         with self.sf.begin() as s:
-            for eid, cat, reason in results:
+            for eid, c in results.items():
                 s.execute(
                     update(Email)
                     .where(Email.id == eid)
-                    .values(category=cat, reason=reason, last_error=None)
+                    .values(
+                        category=c.category,
+                        reason=c.reason,
+                        is_relevant=c.is_relevant,
+                        deadline=c.deadline,
+                        has_document=c.has_document,
+                        ephemeral=c.ephemeral,
+                        category_set_id=c.category_set_id,
+                        last_error=None,
+                    )
                 )
 
     def bump_attempts(self, ids: Iterable[str], error: object) -> None:
