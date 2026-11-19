@@ -48,6 +48,8 @@ Se `secrets/token.json` não existir, a API sobe mesmo assim e loga o erro do wa
 
 ### Setup único na VPS
 
+Automatizado por `deploy/setup-vps.sh` (idempotente): `sudo bash setup-vps.sh <chave-pública-do-CI> <deploy.sh> [pasta-da-instalação-atual]`. Passo a passo equivalente:
+
 ```bash
 # 1. usuário dedicado, sem sudo, no grupo docker
 sudo adduser --disabled-password --gecos "" deploy
