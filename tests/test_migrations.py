@@ -13,6 +13,7 @@ TABLES = {
     "runs", "emails", "run_emails", "watch_state",
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
+    "jobs",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
@@ -52,7 +53,7 @@ def test_no_json_columns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     insp = inspect(create_engine(url))
     json_cols = [
         (t, c["name"])
-        for t in TABLES
+        for t in insp.get_table_names()
         for c in insp.get_columns(t)
         if "JSON" in str(c["type"]).upper()
     ]
