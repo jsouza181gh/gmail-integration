@@ -25,7 +25,9 @@ from src.jobs.types import ClaimedJob
 from src.jobs.worker import Handler
 from src.utils.console import log
 
-AlertKind = Literal["job_dead", "agent_failures", "sync_failures", "watch_failures"]
+AlertKind = Literal[
+    "job_dead", "agent_failures", "sync_failures", "watch_failures", "backfill_done"
+]
 AlertOutcome = Literal["sent", "suppressed", "failed"]
 
 ALERT_HEADER = SYSTEM_HEADER

@@ -16,6 +16,16 @@ from src.utils.console import log
 STALE_CHECK_EVERY_S = 600
 
 
+class Deferred(Exception):
+    """Raised by a handler to retry later without spending an attempt
+    (quota exhausted, upstream overloaded)."""
+
+    def __init__(self, seconds: int, reason: str) -> None:
+        super().__init__(reason)
+        self.seconds = seconds
+        self.reason = reason
+
+
 class Handler(Protocol):
     def __call__(self, job: ClaimedJob) -> None: ...
 
@@ -59,6 +69,10 @@ class Worker:
             if handler is None:
                 raise LookupError(f"sem handler para {kind}")
             handler(job)
+        except Deferred as d:
+            self.store.defer(job.id, d.seconds, d.reason)
+            log(f"job {job.id} ({kind}) adiado {d.seconds}s: {d.reason[:200]}")
+            return True
         except Exception as exc:  # noqa: BLE001 - every failure goes to the queue
             error = f"{type(exc).__name__}: {exc}"
             outcome = self.store.fail(job.id, error)
@@ -75,6 +89,9 @@ class Worker:
     def run_forever(self, stop: Callable[[], bool] = lambda: False) -> None:
         last_stale_check: float | None = None
         log(f"worker {self.worker_id} no ar")
+        orphans = self.store.requeue_orphans()
+        if orphans:
+            log(f"{orphans} job(s) interrompido(s) voltaram para a fila")
         while not stop():
             now = self._clock()
             if last_stale_check is None or now - last_stale_check >= STALE_CHECK_EVERY_S:

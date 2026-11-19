@@ -27,15 +27,16 @@ from src.gmail.labels import GmailLabeler
 from src.gmail.reader import GmailReader
 from src.jobs.store import JobStore
 from src.llm.config import build_gateway
+from src.llm.gateway import LLMGateway
 from src.llm.recorder import DbCallRecorder
 
 
 class Agent:
     """The wired agent pieces a worker needs."""
 
-    def __init__(self, store: Store, jobs: JobStore) -> None:
+    def __init__(self, store: Store, jobs: JobStore, gateway: LLMGateway | None = None) -> None:
         sf = store.sf
-        gateway = build_gateway(DbCallRecorder(sf))
+        gateway = gateway or build_gateway(DbCallRecorder(sf))
         self.trail = Trail(sf)
         self.policy = PolicyResolver(sf)
         self.actions = ActionService(sf, jobs, self.policy)

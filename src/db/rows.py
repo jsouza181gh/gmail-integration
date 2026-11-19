@@ -107,3 +107,28 @@ class WatchStateRow(Row):
     history_id: str
     expiration: int
     updated_at: datetime
+
+
+class AttachmentRow(Row):
+    id: int
+    email_id: str
+    part_id: str
+    filename: str
+    mime_type: str
+    size: int
+    status: str
+    skip_reason: str | None
+    doc_class: str | None
+    doc_type: str | None
+    title: str | None
+    summary: str | None
+    issuer: str | None
+    amount_cents: int | None
+    issued_on: calendar_date | None
+    due_on: calendar_date | None
+    barcode: str | None
+    text: str | None
+    embedding_model: str | None
+    error: str | None
+    created_at: datetime
+    analyzed_at: datetime | None

@@ -37,7 +37,7 @@ class DbCallRecorder:
                     call_id=call.id,
                     position=i,
                     role=m.role,
-                    content=render_turn(m.content, m.tool_calls),
+                    content=render_turn(m.content, m.tool_calls, m.parts),
                 )
                 for i, m in enumerate(rec.request)
             )

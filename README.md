@@ -141,8 +141,32 @@ docker compose exec worker python -m src.cli.enqueue --days 7                   
 ```
 
 - **Bloquear remetente** exige o escopo `gmail.settings.basic`: rode `python -m src.gmail.authorize` de novo (agora pede os dois escopos) e recopie `secrets/token.json` para a VPS. Sem isso, a ação falha com aviso e nada mais quebra.
-- **Alertas** por e-mail (`[gmail-integration] …`, label `Sistema/Alerta`, no máximo 1 por tipo a cada 15 min): job em dead-letter, 3 execuções do agente falhando seguidas, 3 syncs falhando seguidos, falha na renovação do watch.
+- **Alertas** por e-mail (`[gmail-integration] …`, label `Sistema/Alerta`, no máximo 1 por tipo a cada 15 min): job em dead-letter, 3 execuções do agente falhando seguidas, 3 syncs falhando seguidos, falha na renovação do watch, backfill concluído.
 - Env: `WORKER_POLL_S` (5), `WORKER_STALE_MIN` (15), `JOB_MAX_ATTEMPTS` (5), `LABELS_DRY_RUN=1` (labels só no log).
+
+## Backfill e documentos
+
+Indexa o histórico inteiro (menos chats, rascunhos, spam e lixeira), do mais novo para o mais antigo: corpo em texto, classificação, vetor (`gemini-embedding-2`, `vector(1536)` no pgvector) e anexos. E-mails novos são indexados pelo job `index_email` que o sync enfileira.
+
+- **Corrente de jobs `backfill_page`**: 25 mensagens por job, prioridade mínima (e-mails novos e ações sempre passam na frente). O cursor fica em `runs` e só avança no fim da página; refazer uma página não duplica nada.
+- **Sobrevive a deploy:** ao subir, o worker devolve à fila todo job que estava `running`, sem contar tentativa (há um worker por banco). Um job de página que já ficou para trás do cursor reenfileira a página atual, então a corrente não quebra. `backfill start` pode ser repetido a qualquer momento.
+- **Cota do free tier:** quando o Gemini pede para esperar mais de 2 min (cota diária), o job é adiado 30 min sem gastar tentativa.
+- **Não gera sugestões** para e-mail antigo: sem regras, sem loop do agente, sem labels.
+- **Anexos:** PDF com texto é lido localmente (pypdf); PDF escaneado e imagem vão como arquivo para o Gemini (OCR). Classes `pessoal` / `trabalho` / `fiscal` / `outro` (derivadas do tipo: RG, CNH, holerite, boleto, NF-e…), com emissor, valor, emissão, vencimento e linha digitável. O arquivo nunca é guardado: só metadados, texto e vetor; `get` baixa do Gmail na hora pelo `partId`.
+
+```bash
+docker compose exec worker python -m src.cli.backfill start      # cria/retoma (repara a corrente)
+docker compose exec worker python -m src.cli.backfill status
+docker compose exec worker python -m src.cli.jobs status          # fila por tipo
+docker compose exec worker python -m src.cli.jobs dead            # jobs mortos
+docker compose exec worker python -m src.cli.jobs requeue --all-dead --kind backfill_page
+docker compose exec worker python -m src.cli.docs search "boleto de energia"
+docker compose exec worker python -m src.cli.docs list --class fiscal
+docker compose exec worker python -m src.cli.docs get 42 --out /tmp/doc.pdf
+```
+
+- Env: `EMBED_MODEL` (`gemini-embedding-2`; trocar exige revetorizar tudo).
+- Banco: imagem `pgvector/pgvector:pg16` (mesmo formato de dados do Postgres 16).
 
 ## Tipos
 

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 from src.llm.config import LLMConfig, load_llm_config
 from src.llm.errors import LLMExhaustedError, LLMFatalError
 from src.llm.gateway import LLMGateway
+from src.llm.types import EmbedInput, EmbedTask
 from src.llm.types import (
     CallContext,
     CallRecord,
@@ -210,11 +211,11 @@ def test_fast_mode_does_not_pace() -> None:
 
 
 def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    for k in ("GEMINI_MODELS", "LLM_MODE", "FREE_TIER_RPM", "LLM_MAX_ATTEMPTS"):
+    for k in ("GEMINI_MODELS", "LLM_MODE", "FREE_TIER_RPM", "LLM_MAX_ATTEMPTS", "EMBED_MODEL"):
         monkeypatch.delenv(k, raising=False)
     assert load_llm_config() == LLMConfig(
         models=("gemini-3.5-flash-lite", "gemini-3.1-flash-lite"), mode="free", rpm=15,
-        max_attempts=8,
+        max_attempts=8, embed_model="gemini-embedding-2",
     )
 
 
@@ -365,3 +366,97 @@ def test_semantic_check_failure_retries_on_next_model() -> None:
     res = g.generate_structured(P, Out, check=lambda o: "x negativo" if o.x < 0 else None)
     assert res.parsed == Out(x=2) and res.model == "m2" and sleeps == []
     assert rec.items[0].error_kind == "bad_output" and "x negativo" in (rec.items[0].error or "")
+
+
+# --- embeddings, binary parts, quota fail-fast ---------------------------------
+
+class FakeEmbedder:
+    def __init__(self, script: list[int | Exception]) -> None:
+        self.script = script  # number of vectors to return, or an error
+        self.calls: list[tuple[str, int, str, int]] = []
+
+    def embed(self, model: str, inputs: Sequence["EmbedInput"], task: "EmbedTask", dim: int
+              ) -> tuple[tuple[float, ...], ...]:
+        self.calls.append((model, len(inputs), task, dim))
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return tuple(tuple(3.0 if j == 0 else 4.0 if j == 1 else 0.0 for j in range(dim))
+                     for _ in range(step))
+
+
+def egw(embedder: FakeEmbedder, rec: ListRecorder | None = None,
+        sleeps: list[float] | None = None) -> LLMGateway:
+    return LLMGateway(("m1",), mode="fast", recorder=rec or ListRecorder(),
+                      chat_factory=lambda m: FakeChat([]), embedder=embedder,
+                      sleep=(sleeps if sleeps is not None else []).append, clock=lambda: 0.0)
+
+
+def test_embed_sends_one_content_per_input() -> None:
+    from src.db.vector import EMBED_DIM
+    from src.llm.types import EmbedInput
+
+    fake = FakeEmbedder([3])
+    rec = ListRecorder()
+    out = egw(fake, rec).embed([EmbedInput(text=t) for t in "abc"], purpose="embed_email",
+                                task="RETRIEVAL_DOCUMENT")
+    assert fake.calls == [("gemini-embedding-2", 3, "RETRIEVAL_DOCUMENT", EMBED_DIM)]
+    assert len(out.vectors) == 3 and out.model == "gemini-embedding-2"
+    assert abs(sum(v * v for v in out.vectors[0]) - 1.0) < 1e-9  # L2-normalized
+    assert out.vectors[0][:2] == (0.6, 0.8)
+    assert rec.items[0].purpose == "embed_email" and rec.items[0].status == "ok"
+
+
+def test_embed_wrong_count_is_bad_output_and_retries() -> None:
+    from src.llm.types import EmbedInput
+
+    fake = FakeEmbedder([1, 2])
+    out = egw(fake).embed([EmbedInput(text="a"), EmbedInput(text="b")], purpose="p",
+                          task="RETRIEVAL_DOCUMENT")
+    assert len(out.vectors) == 2 and len(fake.calls) == 2
+
+
+def test_long_rate_limit_fails_fast() -> None:
+    from src.llm.errors import quota_exhausted
+
+    sleeps: list[float] = []
+    chat = FakeChat([RuntimeError("429 RESOURCE_EXHAUSTED quota PerDay; retry in 3600s")])
+    with pytest.raises(LLMExhaustedError) as e:
+        gw(chats={"m1": chat}, sleeps=sleeps).generate_structured(P, Out)
+    assert e.value.kinds == ("rate",) and quota_exhausted(e.value)
+    assert sleeps == []
+
+
+def test_exhausted_error_lists_kinds() -> None:
+    from src.llm.errors import quota_exhausted
+
+    chat = FakeChat([RuntimeError("503 UNAVAILABLE"), None])
+    with pytest.raises(LLMExhaustedError) as e:
+        gw(chats={"m1": chat}, max_attempts=2).generate_structured(P, Out)
+    assert e.value.kinds == ("transient", "bad_output") and not quota_exhausted(e.value)
+
+
+def test_human_parts_become_content_blocks() -> None:
+    from langchain_core.messages import HumanMessage
+
+    from src.llm.gateway import _to_langchain
+    from src.llm.types import BinaryPart
+
+    msg = ChatMessage(role="human", content="veja", parts=(
+        BinaryPart(mime_type="application/pdf", data=b"%PDF"),
+        BinaryPart(mime_type="image/png", data=b"\x89PNG"),
+    ))
+    lc = _to_langchain(msg)
+    assert isinstance(lc, HumanMessage) and isinstance(lc.content, list)
+    kinds = [b["type"] for b in lc.content if isinstance(b, dict)]
+    assert kinds == ["text", "file", "image"]
+    pdf = lc.content[1]
+    assert isinstance(pdf, dict) and pdf["mime_type"] == "application/pdf"
+    assert pdf["base64"] == "JVBERg=="
+
+
+def test_parts_only_on_human() -> None:
+    from src.llm.types import BinaryPart
+
+    with pytest.raises(ValidationError):
+        ChatMessage(role="system", content="x", parts=(BinaryPart(mime_type="image/png", data=b"x"),))

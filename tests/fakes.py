@@ -59,8 +59,8 @@ class _Users(_Group):
     def history(self) -> _Group:
         return _Group(self.svc, "history")
 
-    def messages(self) -> _Group:
-        return _Group(self.svc, "messages")
+    def messages(self) -> "_Messages":
+        return _Messages(self.svc, "messages")
 
     def labels(self) -> _Group:
         return _Group(self.svc, "labels")
@@ -72,3 +72,8 @@ class _Users(_Group):
 class _Settings(_Group):
     def filters(self) -> _Group:
         return _Group(self.svc, "settings.filters")
+
+
+class _Messages(_Group):
+    def attachments(self) -> _Group:
+        return _Group(self.svc, "messages.attachments")

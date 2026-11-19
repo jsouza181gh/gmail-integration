@@ -70,3 +70,13 @@ def test_records_tool_calls_and_tool_results(session_factory: sessionmaker[Sessi
         ("ai", 'get_email_body({"email_id":"a"})'),
         ("tool", "corpo"),
     ]
+
+
+def test_recorder_renders_parts_without_bytes(session_factory: sessionmaker[Session]) -> None:
+    from src.llm.types import BinaryPart
+
+    msg = ChatMessage(role="human", content="doc", parts=(BinaryPart(mime_type="application/pdf", data=b"SECRET-BYTES"),))
+    DbCallRecorder(session_factory).record(_record(request=(msg,)))
+    with session_factory() as s:
+        content = s.scalars(select(LlmCallMessage.content)).one()
+    assert content == "doc\n[anexo application/pdf, 12 bytes]"

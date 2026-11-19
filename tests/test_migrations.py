@@ -15,9 +15,11 @@ TABLES = {
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
     "jobs", "agent_configs", "agent_runs", "agent_steps",
     "tool_policies", "automation_rules", "suggested_actions", "gmail_labels", "feedback", "notifications",
+    "email_embeddings", "attachments",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
+    "body", "indexed_at", "index_error",
 }
 
 

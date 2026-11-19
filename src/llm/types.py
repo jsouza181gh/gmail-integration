@@ -26,9 +26,17 @@ class ToolCallRequest(Schema):
     args: JsonArgs
 
 
+class BinaryPart(Schema):
+    """A file sent to the model inline (attachment bytes; never persisted)."""
+
+    mime_type: str
+    data: bytes
+
+
 class ChatMessage(Schema):
     role: Literal["system", "human", "ai", "tool"]
     content: str
+    parts: tuple[BinaryPart, ...] = ()  # role "human" only: files after the text
     tool_calls: tuple[ToolCallRequest, ...] = ()  # role "ai" only
     tool_call_id: str | None = None  # role "tool" only
     # role "ai" only: provider reasoning signatures per tool call id (base64),
@@ -37,6 +45,8 @@ class ChatMessage(Schema):
 
     @model_validator(mode="after")
     def _check_tool_fields(self) -> Self:
+        if self.parts and self.role != "human":
+            raise ValueError("parts só em mensagens 'human'")
         if (self.tool_calls or self.signatures) and self.role != "ai":
             raise ValueError("tool_calls/signatures só em mensagens 'ai'")
         if (self.tool_call_id is not None) != (self.role == "tool"):
@@ -44,14 +54,18 @@ class ChatMessage(Schema):
         return self
 
 
-def render_turn(content: str, calls: Sequence[ToolCallRequest]) -> str:
-    """Readable record of a turn: text plus `name(args)` per tool call."""
-    parts = [content] if content else []
-    parts += [
+def render_turn(
+    content: str, calls: Sequence[ToolCallRequest], files: Sequence["BinaryPart"] = ()
+) -> str:
+    """Readable record of a turn: text, `name(args)` per tool call and one
+    line per file (type and size, never the bytes)."""
+    lines = [content] if content else []
+    lines += [
         f"{c.name}({json.dumps(c.args, separators=(',', ':'), ensure_ascii=False)})"
         for c in calls
     ]
-    return "\n".join(parts)
+    lines += [f"[anexo {f.mime_type}, {len(f.data)} bytes]" for f in files]
+    return "\n".join(lines)
 
 
 class CallContext(Schema):
@@ -144,6 +158,41 @@ class StructuredGenerator(Protocol):
 @runtime_checkable
 class ToolCaller(Protocol):
     def generate_turn(self, prompt: Prompt, tools: Sequence[BaseTool]) -> AssistantTurn: ...
+
+
+EmbedTask = Literal["RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY"]
+
+
+class EmbedInput(Schema):
+    """One item to embed: text, optionally with a file in the same vector."""
+
+    text: str
+    part: BinaryPart | None = None
+
+
+class EmbedResult(Schema):
+    vectors: tuple[tuple[float, ...], ...]
+    model: str
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    def embed(
+        self,
+        inputs: Sequence[EmbedInput],
+        *,
+        purpose: str,
+        task: EmbedTask,
+        context: CallContext = CallContext(),
+    ) -> EmbedResult: ...
+
+
+class EmbedderLike(Protocol):
+    """Provider call: one vector per input, in order."""
+
+    def embed(
+        self, model: str, inputs: Sequence[EmbedInput], task: EmbedTask, dim: int
+    ) -> tuple[tuple[float, ...], ...]: ...
 
 
 class StructuredRunnable(Protocol):

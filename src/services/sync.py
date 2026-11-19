@@ -1,4 +1,4 @@
-"""Incremental sync: Gmail history -> emails table -> one agent job per new email."""
+"""Incremental sync: Gmail history -> emails table -> agent + index jobs per new email."""
 import threading
 from collections.abc import Callable
 
@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from src.db.store import Store
 from src.gmail.messages import MessageSummary, message_summary
 from src.jobs.store import JobStore
-from src.jobs.types import ProcessEmailJob
+from src.jobs.types import IndexEmailJob, ProcessEmailJob
 from src.llm.types import Schema
 from src.utils.console import log
 
@@ -144,6 +144,8 @@ def sync_inbox(store: Store, service: Resource, jobs: JobStore) -> SyncResult:
     store.set_history_id(latest)
 
     enqueued = sum(jobs.enqueue(ProcessEmailJob(email_id=e.id)) for e in new_emails)
+    for e in new_emails:  # body, attachments and vector for search/RAG
+        jobs.enqueue(IndexEmailJob(email_id=e.id))
     return SyncResult(ingested=len(new_emails), enqueued=enqueued)
 
 
