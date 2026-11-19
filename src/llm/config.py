@@ -2,7 +2,7 @@
 import os
 from typing import Literal
 
-from src.llm.gateway import LLMGateway
+from src.llm.gateway import DEFAULT_EMBED_MODEL, LLMGateway
 from src.llm.types import CallRecorder, Schema
 
 # 3.1 is the fallback: when 3.5 answers 503 the next attempt goes to 3.1.
@@ -14,6 +14,7 @@ class LLMConfig(Schema):
     mode: Literal["free", "fast"]
     rpm: int
     max_attempts: int
+    embed_model: str
 
 
 def load_llm_config() -> LLMConfig:
@@ -28,6 +29,7 @@ def load_llm_config() -> LLMConfig:
             "mode": os.getenv("LLM_MODE", "free"),
             "rpm": os.getenv("FREE_TIER_RPM", "15"),
             "max_attempts": os.getenv("LLM_MAX_ATTEMPTS", "8"),
+            "embed_model": os.getenv("EMBED_MODEL", DEFAULT_EMBED_MODEL),
         }
     )
 
@@ -39,5 +41,6 @@ def build_gateway(recorder: CallRecorder | None = None) -> LLMGateway:
         mode=cfg.mode,
         rpm=cfg.rpm,
         max_attempts=cfg.max_attempts,
+        embed_model=cfg.embed_model,
         recorder=recorder,
     )

@@ -7,6 +7,7 @@ and records every attempt (JSON log line + optional recorder).
 One instance per process: pacing state lives in the instance.
 """
 import base64
+import math
 import random
 import re
 import time
@@ -20,18 +21,27 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from google import genai
+from google.genai import types as genai_types
 from langchain_core.tools import BaseTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from src.db.vector import EMBED_DIM
 from src.llm.errors import LLMExhaustedError, LLMFatalError
 from src.llm.types import (
     AssistantTurn,
+    BinaryPart,
+    CallContext,
     CallRecord,
     CallRecorder,
     Check,
     ChatMessage,
     ChatModelLike,
+    EmbedderLike,
+    EmbedInput,
+    EmbedResult,
+    EmbedTask,
     ErrorKind,
     Prompt,
     StructuredResult,
@@ -45,6 +55,10 @@ from src.utils.console import log
 SIGNATURES_KEY = "__gemini_function_call_thought_signatures__"
 BACKOFF_BASE_S = 3
 BACKOFF_MAX_S = 120
+# A 429 that asks for a longer wait means the quota (usually the daily one)
+# is gone: fail now and let the job queue retry later instead of blocking.
+RATE_WAIT_MAX_S = 120
+DEFAULT_EMBED_MODEL = "gemini-embedding-2"
 ERROR_TEXT_MAX = 300
 
 
@@ -109,10 +123,27 @@ def _retry_delay(exc: BaseException) -> float | None:
     return None
 
 
+class _QuotaGone(Exception):
+    """A 429 whose advised wait exceeds RATE_WAIT_MAX_S."""
+
+
+def _file_block(part: BinaryPart) -> dict[str, str]:
+    kind = "image" if part.mime_type.startswith("image/") else "file"
+    return {
+        "type": kind,
+        "base64": base64.b64encode(part.data).decode("ascii"),
+        "mime_type": part.mime_type,
+    }
+
+
 def _to_langchain(msg: ChatMessage) -> BaseMessage:
     if msg.role == "system":
         return SystemMessage(content=msg.content)
     if msg.role == "human":
+        if msg.parts:
+            blocks: list[str | dict[str, str]] = [{"type": "text", "text": msg.content}]
+            blocks += [_file_block(p) for p in msg.parts]
+            return HumanMessage(content=blocks)
         return HumanMessage(content=msg.content)
     if msg.role == "tool":
         return ToolMessage(content=msg.content, tool_call_id=msg.tool_call_id or "")
@@ -140,6 +171,42 @@ def _default_chat(model: str) -> ChatModelLike:
     return ChatGoogleGenerativeAI(model=model, max_retries=0, timeout=90)
 
 
+class GenAIEmbedder:
+    """google-genai embeddings (LangChain's class is text-only).
+
+    One `Content` per input: a list of plain strings would be aggregated by
+    gemini-embedding-2 into a single vector.
+    """
+
+    def __init__(self) -> None:
+        self._client: genai.Client | None = None
+
+    def embed(
+        self, model: str, inputs: Sequence[EmbedInput], task: EmbedTask, dim: int
+    ) -> tuple[tuple[float, ...], ...]:
+        if self._client is None:
+            self._client = genai.Client()
+        contents: list[genai_types.Content] = []
+        for item in inputs:
+            parts = [genai_types.Part.from_text(text=item.text)]
+            if item.part is not None:
+                parts.append(
+                    genai_types.Part.from_bytes(data=item.part.data, mime_type=item.part.mime_type)
+                )
+            contents.append(genai_types.Content(role="user", parts=parts))
+        out = self._client.models.embed_content(
+            model=model,
+            contents=contents,
+            config=genai_types.EmbedContentConfig(output_dimensionality=dim, task_type=task),
+        )
+        return tuple(tuple(e.values or ()) for e in out.embeddings or ())
+
+
+def _normalized(v: tuple[float, ...]) -> tuple[float, ...]:
+    norm = math.sqrt(sum(x * x for x in v))
+    return v if norm == 0 else tuple(x / norm for x in v)
+
+
 class LLMGateway:
     def __init__(
         self,
@@ -150,6 +217,8 @@ class LLMGateway:
         max_attempts: int = 8,
         recorder: CallRecorder | None = None,
         chat_factory: Callable[[str], ChatModelLike] | None = None,
+        embed_model: str = DEFAULT_EMBED_MODEL,
+        embedder: EmbedderLike | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -161,6 +230,8 @@ class LLMGateway:
         self.max_attempts = max_attempts
         self.recorder = recorder
         self._chat_factory = chat_factory or _default_chat
+        self.embed_model = embed_model
+        self._embedder = embedder or GenAIEmbedder()
         self._chats: dict[str, ChatModelLike] = {}
         self._sleep = sleep
         self._clock = clock
@@ -182,6 +253,8 @@ class LLMGateway:
         exp = min(BACKOFF_BASE_S * 2 ** attempt, BACKOFF_MAX_S)
         if kind == "rate":
             delay = _retry_delay(exc)
+            if delay is not None and delay > RATE_WAIT_MAX_S:
+                raise _QuotaGone(f"cota esgotada em {model} (pede {delay:.0f}s)") from exc
             seconds = (delay if delay is not None else exp) + 1
             why = f"429 em {model}"
         elif kind == "transient":
@@ -205,22 +278,28 @@ class LLMGateway:
     def _attempts[R](
         self,
         prompt: Prompt,
-        call: Callable[[ChatModelLike, list[BaseMessage]], _Answer[R]],
+        call: Callable[[str], _Answer[R]],
+        models: Sequence[str] | None = None,
     ) -> tuple[R, str, TokenUsage]:
-        """Pace, call, classify errors, back off and record every attempt."""
-        messages = [_to_langchain(m) for m in prompt.messages]
+        """Pace, call, classify errors, back off and record every attempt.
+
+        `call` gets the attempt's model name; `prompt` is what gets recorded.
+        """
+        rotation = tuple(models or self.models)
         last_exc: BaseException | None = None
+        kinds: list[ErrorKind] = []
 
         for attempt in range(self.max_attempts):
-            model = self.models[attempt % len(self.models)]
+            model = rotation[attempt % len(rotation)]
             self._pace()
             started = self._clock()
             try:
-                answer = call(self._chat(model), messages)
+                answer = call(model)
             except (Exception, ValidationError) as exc:  # noqa: BLE001 - classified below
                 self._last_call = self._clock()
                 last_exc = exc
                 kind = _error_kind(exc)
+                kinds.append(kind)
                 bad = exc if isinstance(exc, _BadOutput) else None
                 self._record(
                     CallRecord(
@@ -239,7 +318,10 @@ class LLMGateway:
                 )
                 if kind == "fatal":
                     raise LLMFatalError(f"erro não recuperável ({model}): {exc}") from exc
-                self._backoff(kind, exc, attempt, model)
+                try:
+                    self._backoff(kind, exc, attempt, model)
+                except _QuotaGone as gone:
+                    raise LLMExhaustedError(str(gone), kinds=("rate",)) from exc
                 continue
 
             self._last_call = self._clock()
@@ -261,14 +343,16 @@ class LLMGateway:
             return answer.value, model, answer.usage
 
         raise LLMExhaustedError(
-            f"esgotou {self.max_attempts} tentativas: {last_exc}"
+            f"esgotou {self.max_attempts} tentativas: {last_exc}", kinds=tuple(kinds)
         ) from last_exc
 
     def generate_structured[T: BaseModel](
         self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]:
-        def call(chat: ChatModelLike, messages: list[BaseMessage]) -> _Answer[T]:
-            runnable = chat.with_structured_output(schema, include_raw=True)
+        messages = [_to_langchain(m) for m in prompt.messages]
+
+        def call(model: str) -> _Answer[T]:
+            runnable = self._chat(model).with_structured_output(schema, include_raw=True)
             out = _StructuredRaw.model_validate(runnable.invoke(messages))
             usage = TokenUsage.from_langchain(out.raw.usage_metadata)
             if out.parsing_error is not None or not isinstance(out.parsed, schema):
@@ -286,8 +370,10 @@ class LLMGateway:
     def generate_turn(self, prompt: Prompt, tools: Sequence[BaseTool]) -> AssistantTurn:
         """One tool-calling turn. The caller executes the tools and loops."""
 
-        def call(chat: ChatModelLike, messages: list[BaseMessage]) -> _Answer[AssistantTurn]:
-            out = chat.bind_tools(tools).invoke(messages)
+        messages = [_to_langchain(m) for m in prompt.messages]
+
+        def call(model: str) -> _Answer[AssistantTurn]:
+            out = self._chat(model).bind_tools(tools).invoke(messages)
             if not isinstance(out, AIMessage):
                 raise _BadOutput(
                     f"esperava AIMessage, veio {type(out).__name__}", TokenUsage(), None
@@ -311,3 +397,35 @@ class LLMGateway:
 
         turn, model, _ = self._attempts(prompt, call)
         return turn.model_copy(update={"model": model})
+
+    def embed(
+        self,
+        inputs: Sequence[EmbedInput],
+        *,
+        purpose: str,
+        task: EmbedTask,
+        context: CallContext = CallContext(),
+    ) -> EmbedResult:
+        """One L2-normalized vector per input, with the same retries/records."""
+        items = tuple(inputs)
+        if not items:
+            return EmbedResult(vectors=(), model=self.embed_model)
+        files = tuple(i.part for i in items if i.part is not None)
+        prompt = Prompt(
+            purpose=purpose,
+            messages=(
+                ChatMessage(role="human", content=f"embed {len(items)} item(s)", parts=files),
+            ),
+            context=context,
+        )
+
+        def call(model: str) -> _Answer[tuple[tuple[float, ...], ...]]:
+            vectors = self._embedder.embed(model, items, task, EMBED_DIM)
+            if len(vectors) != len(items) or any(len(v) != EMBED_DIM for v in vectors):
+                raise _BadOutput(
+                    f"{len(vectors)} vetor(es) para {len(items)} entrada(s)", TokenUsage(), None
+                )
+            return _Answer(tuple(_normalized(v) for v in vectors), TokenUsage(), None)
+
+        vectors, model, _ = self._attempts(prompt, call, models=(self.embed_model,))
+        return EmbedResult(vectors=vectors, model=model)
