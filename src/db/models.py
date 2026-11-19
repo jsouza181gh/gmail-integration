@@ -324,6 +324,21 @@ class SuggestedAction(Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class Feedback(Base):
+    """The user's verdict on a suggestion (and optional comment -> KB entry)."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"), index=True)
+    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    kb_entry_id: Mapped[int | None] = mapped_column(ForeignKey("kb_entries.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Job(Base):
     """Work queue; payload lives in typed nullable columns per kind."""
 

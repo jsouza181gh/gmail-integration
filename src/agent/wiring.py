@@ -7,9 +7,11 @@ thread-safe and tokens refresh.
 import os
 
 from src.agent.actions import ActionService
+from src.agent.approvals import ApprovalService
 from src.agent.config import DbAgentConfigs
 from src.agent.context import AgentContext, LLMDeps, RunScope
 from src.agent.executor import ToolExecutor
+from src.agent.flows.execute_action import ExecuteActionFlow
 from src.agent.flows.process_email import ProcessEmailFlow
 from src.agent.kb import DbKb
 from src.agent.loop import AgentLoop
@@ -19,7 +21,8 @@ from src.agent.sender_history import DbSenderHistory
 from src.agent.tools import build_registry
 from src.agent.trail import Trail
 from src.db.store import Store
-from src.gmail.client import get_gmail_service
+from src.gmail.actions import GmailActions
+from src.gmail.client import get_gmail_service, has_scope
 from src.gmail.labels import GmailLabeler
 from src.gmail.reader import GmailReader
 from src.jobs.store import JobStore
@@ -56,6 +59,10 @@ class Agent:
                 kb=kb,
             )
 
+        self.approvals = ApprovalService(sf, jobs)
+        self.execute_action = ExecuteActionFlow(
+            self.approvals, store, GmailActions(get_gmail_service, has_scope)
+        )
         self.process_email = ProcessEmailFlow(
             store=store,
             trail=self.trail,

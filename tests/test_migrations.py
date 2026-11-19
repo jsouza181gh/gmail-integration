@@ -14,7 +14,7 @@ TABLES = {
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
     "jobs", "agent_configs", "agent_runs", "agent_steps",
-    "tool_policies", "automation_rules", "suggested_actions", "gmail_labels",
+    "tool_policies", "automation_rules", "suggested_actions", "gmail_labels", "feedback",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
