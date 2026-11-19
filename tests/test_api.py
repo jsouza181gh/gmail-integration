@@ -104,3 +104,48 @@ def test_entrypoints_import():
     import src.cli.rules  # noqa: F401
     import src.worker  # noqa: F401
     import src.agent.wiring  # noqa: F401
+
+
+# --- Pub/Sub OIDC ------------------------------------------------------------
+
+SA = "push@project.iam.gserviceaccount.com"
+
+
+def oidc_client(claims=None, error=None):
+    from src.api.pubsub_auth import PubSubVerifier
+
+    seen = []
+
+    def verify(token, audience):
+        seen.append((token, audience))
+        if error:
+            raise ValueError(error)
+        return claims
+
+    verifier = PubSubVerifier("https://x.org/webhooks/gmail", SA, verify)
+    client, calls = make_client(token="s3cret", pubsub=verifier)
+    return client, calls, seen
+
+
+def test_webhook_oidc_valid():
+    client, calls, seen = oidc_client({"email": SA, "email_verified": True})
+    with client:
+        r = client.post("/webhooks/gmail", json=push_body(), headers={"Authorization": "Bearer abc"})
+    assert r.status_code == 204 and calls == [1]
+    assert seen == [("abc", "https://x.org/webhooks/gmail")]
+
+
+def test_webhook_oidc_wrong_email_401():
+    client, calls, _ = oidc_client({"email": "other@x.com", "email_verified": True})
+    with client:
+        r = client.post("/webhooks/gmail?token=s3cret", json=push_body(),
+                        headers={"Authorization": "Bearer abc"})
+    assert r.status_code == 401 and calls == []
+
+
+def test_webhook_oidc_missing_or_invalid_header_401():
+    client, calls, _ = oidc_client(error="bad signature")
+    with client:
+        assert client.post("/webhooks/gmail?token=s3cret", json=push_body()).status_code == 401
+        r = client.post("/webhooks/gmail", json=push_body(), headers={"Authorization": "Bearer abc"})
+    assert r.status_code == 401 and calls == []

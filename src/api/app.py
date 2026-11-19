@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from src.api.deps import ApiDeps
 from src.api.log_filters import install_access_log_filter
+from src.api.pubsub_auth import PubSubVerifier
 from src.api.security import RateLimiter, security_middleware
 from src.utils.console import log
 
@@ -71,6 +72,7 @@ def create_app(
     renew_interval_s: float = 86400,
     retry_s: float = 3600,
     api: ApiDeps | None = None,
+    pubsub: PubSubVerifier | None = None,
 ) -> FastAPI:
     """`api` enables the authenticated panel API under /api; without it only
     the webhook and /healthz exist (e.g. before the auth secrets are set)."""
@@ -110,7 +112,10 @@ def create_app(
 
     @app.post("/webhooks/gmail")
     async def gmail_webhook(request: Request, background: BackgroundTasks) -> Response:
-        if token is not None:
+        if pubsub is not None:  # OIDC replaces the query token once configured
+            if not pubsub.ok(request.headers.get("authorization")):
+                return Response(status_code=401)
+        elif token is not None:
             given = request.query_params.get("token", "")
             if not hmac.compare_digest(given.encode(), token.encode()):
                 return Response(status_code=401)
@@ -179,9 +184,13 @@ def build_app() -> FastAPI:
     else:
         log("JWT_SECRET ausente: API do painel desligada (só webhook e /healthz)")
 
+    audience, account = os.getenv("PUBSUB_AUDIENCE"), os.getenv("PUBSUB_SERVICE_ACCOUNT")
+    pubsub = PubSubVerifier(audience, account) if audience and account else None
+
     return create_app(
         trigger=coordinator.trigger,
         token=os.getenv("WEBHOOK_TOKEN") or None,
+        pubsub=pubsub,
         on_startup=start_watch,
         renew=renew_and_sync,
         api=api,
