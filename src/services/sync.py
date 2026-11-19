@@ -85,16 +85,16 @@ def sync_inbox(store, service, classifier):
         raise RuntimeError("estado do watch ausente; ensure_watch ainda não rodou")
 
     try:
-        ids, latest = list_new_message_ids(service, state["history_id"])
+        ids, latest = list_new_message_ids(service, state.history_id)
     except HistoryExpired:
         log("historyId expirado; fallback para os últimos dias da INBOX")
         ids, latest = list_recent_inbox_ids(service)
 
-    run_id = store.get_or_create_run(WEBHOOK_QUERY)["id"]
+    run_id = store.get_or_create_run(WEBHOOK_QUERY).id
     known = store.known_ids(ids)
     summaries = [_summary_or_none(service, i) for i in ids if i not in known]
     new_emails = [s for s in summaries if s]
-    store.ingest(run_id, [e["id"] for e in new_emails] + list(known), new_emails)
+    store.ingest(run_id, [e.id for e in new_emails] + list(known), new_emails)
     store.set_history_id(latest)
 
     try:

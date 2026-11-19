@@ -5,7 +5,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 from src.db.models import Base
 
@@ -35,6 +35,16 @@ def test_upgrade_and_downgrade(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     command.downgrade(cfg, "base")
     assert set(inspect(create_engine(url)).get_table_names()) == {"alembic_version"}
+
+
+def test_seed_v1_taxonomy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, url = _upgraded(tmp_path, monkeypatch)
+    with create_engine(url).connect() as c:
+        assert c.execute(text("select count(*) from categories")).scalar() == 11
+        assert c.execute(text("select count(*) from category_flags")).scalar() == 4
+        assert (c.execute(text("select count(*) from category_examples")).scalar() or 0) >= 11
+        assert c.execute(text("select count(*) from category_sets where active")).scalar() == 1
+        assert c.execute(text("select count(*) from kb_entries")).scalar() == 1
 
 
 def test_no_json_columns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

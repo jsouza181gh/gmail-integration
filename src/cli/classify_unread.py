@@ -20,27 +20,27 @@ def fetch_page(store, service, run):
     """Fetch one page of the run's query and persist it with the new cursor."""
     params = {
         "userId": USER_ID,
-        "q": run["query"],
+        "q": run.query,
         "maxResults": PAGE_SIZE,
     }
-    if run["page_token"]:
-        params["pageToken"] = run["page_token"]
+    if run.page_token:
+        params["pageToken"] = run.page_token
 
     try:
         result = service.users().messages().list(**params).execute(num_retries=5)
     except HttpError as e:
-        if run["page_token"] and e.resp.status == 400:
+        if run.page_token and e.resp.status == 400:
             log("page token inválido/expirado; recomeçando a listagem (cache evita refetch)")
-            store.reset_cursor(run["id"])
+            store.reset_cursor(run.id)
             return
         raise
 
     ids = [m["id"] for m in result.get("messages", [])]
     known = store.known_ids(ids)
     new_emails = [message_summary(service, i) for i in ids if i not in known]
-    store.save_page(run["id"], ids, new_emails, result.get("nextPageToken"))
+    store.save_page(run.id, ids, new_emails, result.get("nextPageToken"))
     log(
-        f"página {run['pages'] + 1}: {len(ids)} emails "
+        f"página {run.pages + 1}: {len(ids)} emails "
         f"({len(new_emails)} novos, {len(known)} em cache)"
     )
 
@@ -51,7 +51,7 @@ def print_report(store, run_id):
     rows = store.report_rows(run_id)
     groups = {}
     for r in rows:
-        groups.setdefault(r["category"] or "Não classificado", []).append(r)
+        groups.setdefault(r.category or "Não classificado", []).append(r)
 
     print(f"\nTotal de e-mails não lidos: {len(rows)}\n")
     for cat in CATEGORY_ORDER:
@@ -65,7 +65,7 @@ def print_report(store, run_id):
         print(f"\n## {cat} ({len(items)})")
         for r in items:
             print(
-                f"- {r['sender']} — {r['subject']} — {r['date']} — {r['reason']}"
+                f"- {r.sender} — {r.subject} — {r.date} — {r.reason}"
             )
 
 
@@ -75,10 +75,10 @@ def run(query=DEFAULT_QUERY, reset=False, max_pages=None):
     store = Store()
     try:
         current = store.get_or_create_run(query, force_new=reset)
-        run_id = current["id"]
+        run_id = current.id
         log(
-            f"run #{run_id} ({'retomando' if current['pages'] else 'nova'}): "
-            f"{current['pages']} páginas já buscadas, "
+            f"run #{run_id} ({'retomando' if current.pages else 'nova'}): "
+            f"{current.pages} páginas já buscadas, "
             f"{store.count_pending(run_id)} pendentes"
         )
 
@@ -89,7 +89,7 @@ def run(query=DEFAULT_QUERY, reset=False, max_pages=None):
         classify_pending(store, classifier, run_id)
         while True:
             current = store.get_run(run_id)
-            if current["fetch_done"]:
+            if current.fetch_done:
                 break
             if max_pages is not None and pages_this_session >= max_pages:
                 log(f"limite de {max_pages} páginas; rode de novo para continuar")
@@ -98,7 +98,7 @@ def run(query=DEFAULT_QUERY, reset=False, max_pages=None):
             pages_this_session += 1
             classify_pending(store, classifier, run_id)
 
-        if store.get_run(run_id)["fetch_done"] and not store.count_pending(run_id):
+        if store.get_run(run_id).fetch_done and not store.count_pending(run_id):
             print_report(store, run_id)
         return 0
     except Abort as exc:

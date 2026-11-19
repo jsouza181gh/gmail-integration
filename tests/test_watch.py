@@ -44,13 +44,11 @@ def test_missing_topic_raises(monkeypatch):
 def test_ensure_watch_first_run_saves_cursor(session_factory):
     store = Store(session_factory)
     ensure_watch(store, make_service("100", "1000"))
-    assert store.get_watch_state() == {
-        "id": 1,
-        "email_address": "me@x.com",
-        "history_id": "100",
-        "expiration": 1000,
-        "updated_at": store.get_watch_state()["updated_at"],
-    }
+    state = store.get_watch_state()
+    assert state is not None
+    assert (state.id, state.email_address, state.history_id, state.expiration) == (
+        1, "me@x.com", "100", 1000,
+    )
 
 
 def test_renew_does_not_move_cursor(session_factory):
@@ -58,5 +56,5 @@ def test_renew_does_not_move_cursor(session_factory):
     ensure_watch(store, make_service("100", "1000"))
     ensure_watch(store, make_service("999", "2000"))
     state = store.get_watch_state()
-    assert state["history_id"] == "100"
-    assert state["expiration"] == 2000
+    assert state.history_id == "100"
+    assert state.expiration == 2000

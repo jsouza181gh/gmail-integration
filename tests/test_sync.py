@@ -18,7 +18,7 @@ class FakeClassifier:
         self.calls += 1
         if self.error:
             raise self.error
-        return {r["id"]: ("Outros", "teste") for r in rows}
+        return {r.id: ("Outros", "teste") for r in rows}
 
 
 def message(mid):
@@ -64,7 +64,7 @@ def store(session_factory):
 
 
 def run_of(store):
-    return store.get_or_create_run(WEBHOOK_QUERY)["id"]
+    return store.get_or_create_run(WEBHOOK_QUERY).id
 
 
 def test_ingests_and_classifies_new_message(store):
@@ -73,10 +73,10 @@ def test_ingests_and_classifies_new_message(store):
 
     assert result == {"ingested": 2, "pending": 0}
     rows = store.report_rows(run_of(store))
-    assert {r["id"] for r in rows} == {"m1", "m2"}
-    assert all(r["category"] == "Outros" for r in rows)
-    assert rows[0]["sender"].endswith("@x.com")
-    assert store.get_watch_state()["history_id"] == "20"
+    assert {r.id for r in rows} == {"m1", "m2"}
+    assert all(r.category == "Outros" for r in rows)
+    assert rows[0].sender.endswith("@x.com")
+    assert store.get_watch_state().history_id == "20"
     name, kw = svc.calls[0]
     assert (name, kw["startHistoryId"], kw["labelId"]) == ("history.list", "10", "INBOX")
     assert kw["historyTypes"] == ["messageAdded"]
@@ -99,8 +99,8 @@ def test_deleted_message_is_skipped(store):
     )
     result = sync_inbox(store, svc, FakeClassifier())
     assert result["ingested"] == 1
-    assert {r["id"] for r in store.report_rows(run_of(store))} == {"m1"}
-    assert store.get_watch_state()["history_id"] == "20"
+    assert {r.id for r in store.report_rows(run_of(store))} == {"m1"}
+    assert store.get_watch_state().history_id == "20"
 
 
 def test_history_expired_falls_back(store):
@@ -115,7 +115,7 @@ def test_history_expired_falls_back(store):
     result = sync_inbox(store, svc, FakeClassifier())
 
     assert result["ingested"] == 1
-    assert store.get_watch_state()["history_id"] == "500"
+    assert store.get_watch_state().history_id == "500"
     listing = [kw for name, kw in svc.calls if name == "messages.list"][0]
     assert listing["q"] == "in:inbox newer_than:7d"
 
@@ -124,12 +124,12 @@ def test_llm_abort_keeps_pending_and_advances_cursor(store):
     svc = make_service(lambda **kw: history_response(["m1"], "20"))
     first = sync_inbox(store, svc, FakeClassifier(error=Abort("llm fora")))
     assert first == {"ingested": 1, "pending": 1}
-    assert store.get_watch_state()["history_id"] == "20"
+    assert store.get_watch_state().history_id == "20"
 
     empty = make_service(lambda **kw: history_response([], "20"))
     second = sync_inbox(store, empty, FakeClassifier())
     assert second == {"ingested": 0, "pending": 0}
-    assert store.report_rows(run_of(store))[0]["category"] == "Outros"
+    assert store.report_rows(run_of(store))[0].category == "Outros"
 
 
 def test_sync_without_watch_state_raises(session_factory):

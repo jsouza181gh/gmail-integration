@@ -17,9 +17,13 @@ def get_database_url() -> str:
 
 def make_session_factory(url: str | None = None) -> sessionmaker[Session]:
     url = url or get_database_url()
-    kwargs = {"pool_pre_ping": True}
     if url.startswith("sqlite") and ":memory:" in url:
-        kwargs["poolclass"] = StaticPool
-        kwargs["connect_args"] = {"check_same_thread": False}
-    engine = create_engine(url, **kwargs)
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+    else:
+        engine = create_engine(url, pool_pre_ping=True)
     return sessionmaker(engine, expire_on_commit=False)

@@ -125,18 +125,18 @@ class Classifier:
         payload = json.dumps(
             [
                 {
-                    "id": r["id"],
-                    "from": r["sender"],
-                    "subject": r["subject"],
-                    "date": r["date"],
-                    "snippet": r["snippet"],
+                    "id": r.id,
+                    "from": r.sender,
+                    "subject": r.subject,
+                    "date": r.date,
+                    "snippet": r.snippet,
                 }
                 for r in rows
             ],
             ensure_ascii=False,
         )
         messages = [("system", SYSTEM_PROMPT), ("human", payload)]
-        wanted = {r["id"] for r in rows}
+        wanted = {r.id for r in rows}
         last_exc = None
 
         for attempt in range(MAX_CALL_ATTEMPTS):
@@ -179,7 +179,7 @@ def classify_pending(store, classifier, run_id):
         rows = store.pending(run_id, BATCH_SIZE)
         if not rows:
             return
-        ids = [r["id"] for r in rows]
+        ids = [r.id for r in rows]
         try:
             results = classifier.classify(rows)
         except Abort:

@@ -1,28 +1,56 @@
 """Gmail message helpers shared by the sync and the CLI."""
 import re
 
+from googleapiclient.discovery import Resource
+from pydantic import BaseModel
+
+from src.llm.types import Schema
+
 USER_ID = "me"
 SUMMARY_HEADERS = ["From", "Subject", "Date"]
 SNIPPET_MAX_CHARS = 80
 _INVISIBLE_RE = re.compile(r"[​-‏⁠﻿⠀\xa0]")
 
 
-def message_summary(service, message_id):
-    message = service.users().messages().get(
+class _Header(BaseModel):
+    name: str
+    value: str
+
+
+class _Payload(BaseModel):
+    headers: list[_Header] = []
+
+
+class _GmailMessage(BaseModel):
+    """The slice of a `messages.get(format=metadata)` response we read."""
+
+    id: str
+    snippet: str | None = None
+    payload: _Payload = _Payload()
+
+
+class MessageSummary(Schema):
+    id: str
+    sender: str
+    subject: str
+    date: str
+    snippet: str
+
+
+def message_summary(service: Resource, message_id: str) -> MessageSummary:
+    raw = service.users().messages().get(
         userId=USER_ID,
         id=message_id,
         format="metadata",
         metadataHeaders=SUMMARY_HEADERS,
     ).execute(num_retries=5)
-    headers = {
-        h["name"]: h["value"]
-        for h in message.get("payload", {}).get("headers", [])
-    }
-    snippet = _INVISIBLE_RE.sub("", message.get("snippet") or "")
-    return {
-        "id": message["id"],
-        "from": (headers.get("From") or "")[:60],
-        "subject": (headers.get("Subject") or "")[:100],
-        "date": (headers.get("Date") or "")[:25],
-        "snippet": " ".join(snippet.split())[:SNIPPET_MAX_CHARS],
-    }
+    message = _GmailMessage.model_validate(raw)
+    headers = {h.name: h.value for h in message.payload.headers}
+    snippet = _INVISIBLE_RE.sub("", message.snippet or "")
+    return MessageSummary(
+        id=message.id,
+        sender=(headers.get("From") or "")[:60],
+        subject=(headers.get("Subject") or "")[:100],
+        date=(headers.get("Date") or "")[:25],
+        snippet=" ".join(snippet.split())[:SNIPPET_MAX_CHARS],
+    )
