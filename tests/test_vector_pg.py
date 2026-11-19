@@ -22,6 +22,7 @@ def unit(i: int) -> tuple[float, ...]:
 def pg() -> sessionmaker[Session]:
     sf = make_session_factory(URL)
     with sf.begin() as s:
+        s.execute(text("DELETE FROM attachments WHERE email_id LIKE 'vectest-%'"))
         s.execute(text("DELETE FROM email_embeddings WHERE email_id LIKE 'vectest-%'"))
         s.execute(text("DELETE FROM emails WHERE id LIKE 'vectest-%'"))
         for i in range(2):
@@ -48,3 +49,18 @@ def test_hnsw_indexes_exist(pg: sessionmaker[Session]) -> None:
     with pg() as s:
         names = set(s.scalars(text("SELECT indexname FROM pg_indexes WHERE indexdef ILIKE '%hnsw%'")))
     assert {"ix_email_embeddings_hnsw", "ix_attachments_hnsw"} <= names
+
+
+def test_search_ranks_nearest_first(pg: sessionmaker[Session]) -> None:
+    from src.db.models import Attachment
+    from src.indexing.store import IndexStore
+
+    with pg.begin() as s:
+        s.execute(text("DELETE FROM attachments WHERE email_id LIKE 'vectest-%'"))
+        s.add(Attachment(email_id="vectest-0", part_id="1", filename="b.pdf", mime_type="application/pdf",
+                         size=1, status="done", title="Boleto", embedding=unit(2)))
+    near_att = tuple(1.0 if j == 2 else 0.0 for j in range(EMBED_DIM))
+    hits = IndexStore(pg).search(near_att, k=50)
+    mine = [h for h in hits if h.id in ("vectest-0", "vectest-1") or h.title == "Boleto"]
+    assert mine[0].kind == "attachment" and mine[0].title == "Boleto"
+    assert mine[0].score > mine[-1].score

@@ -5,12 +5,14 @@ any point can simply run again.
 """
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
+from typing import Literal
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, Float, cast, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.models import Attachment, Email, EmailEmbedding, Run, RunEmail
 from src.db.rows import AttachmentRow, EmailRow, RunRow
+from src.db.vector import Vector
 from src.gmail.full import AttachmentRef, FullMessage
 from src.llm.types import Schema
 
@@ -43,6 +45,13 @@ class AnalysisRecord(Schema):
 class EmailHeader(Schema):
     sender: str | None
     subject: str | None
+
+
+class SearchHit(Schema):
+    kind: Literal["email", "attachment"]
+    id: str  # email id, or attachment id as text
+    title: str
+    score: float  # cosine similarity, higher is closer
 
 
 class RunCounts(Schema):
@@ -250,3 +259,47 @@ class IndexStore:
                 embedded=embedded,
                 attachments=attachments,
             )
+
+    # --- search and documents ---------------------------------------------
+
+    def search(self, vector: tuple[float, ...], k: int) -> list[SearchHit]:
+        """Nearest emails and documents by cosine distance (Postgres only)."""
+        with self.sf() as s:
+            if s.get_bind().dialect.name != "postgresql":
+                raise NotImplementedError("busca vetorial exige Postgres + pgvector")
+            q = cast(vector, Vector())
+            e_dist = EmailEmbedding.embedding.op("<=>", return_type=Float)(q)
+            emails = s.execute(
+                select(Email.id, Email.subject, Email.sender, e_dist)
+                .join(EmailEmbedding, EmailEmbedding.email_id == Email.id)
+                .order_by(e_dist)
+                .limit(k)
+            ).all()
+            a_dist = Attachment.embedding.op("<=>", return_type=Float)(q)
+            docs = s.execute(
+                select(Attachment.id, Attachment.title, Attachment.filename, a_dist)
+                .where(Attachment.embedding.is_not(None))
+                .order_by(a_dist)
+                .limit(k)
+            ).all()
+        hits = [
+            SearchHit(kind="email", id=i, title=f"{subj or '(sem assunto)'} — {sender or ''}",
+                      score=1 - float(d))
+            for i, subj, sender, d in emails
+        ] + [
+            SearchHit(kind="attachment", id=str(i), title=title or name, score=1 - float(d))
+            for i, title, name, d in docs
+        ]
+        return sorted(hits, key=lambda h: h.score, reverse=True)[:k]
+
+    def documents(
+        self, doc_class: str | None, doc_type: str | None, limit: int
+    ) -> list[AttachmentRow]:
+        q = select(Attachment).where(Attachment.status == "done")
+        if doc_class is not None:
+            q = q.where(Attachment.doc_class == doc_class)
+        if doc_type is not None:
+            q = q.where(Attachment.doc_type == doc_type)
+        with self.sf() as s:
+            rows = s.scalars(q.order_by(Attachment.id.desc()).limit(limit))
+            return [AttachmentRow.model_validate(r) for r in rows]
