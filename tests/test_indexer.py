@@ -149,6 +149,7 @@ def test_other_exhaustion_fails_normally(session_factory: sessionmaker[Session])
     ("image/png", "tiny.png", 20_000, False, "small_image"),
     ("image/png", "logo.png", 90_000, True, "inline"),
     ("application/pdf", "huge.pdf", 16_000_000, False, "too_large"),
+    ("image/jpeg", "scan.jpg", 11_000_000, False, "too_large"),
     ("application/zip", "x.zip", 10_000, False, "unsupported_type"),
 ])
 def test_candidate_rules(mime: str, name: str, size: int, inline: bool, reason: str | None) -> None:

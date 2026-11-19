@@ -20,7 +20,8 @@ from src.utils.console import log
 EMBED_TEXT_MAX = 8000
 QUOTA_DEFER_S = 1800
 SMALL_IMAGE_BYTES = 30_000
-MAX_ATTACHMENT_BYTES = 15_000_000
+# inline request limit is 20 MB after base64 (+33%): keep files well under it
+MAX_ATTACHMENT_BYTES = 10_000_000
 PDF = "application/pdf"
 XML_TYPES = ("application/xml", "text/xml")
 IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif")
