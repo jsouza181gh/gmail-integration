@@ -1,0 +1,227 @@
+"""/api/backfill, /api/runs, /api/jobs, /api/usage: what the system is doing."""
+import threading
+from datetime import date, datetime, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
+from sqlalchemy import case, func, select
+
+from src.agent.trail import Trail
+from src.api import queries
+from src.api.deps import ApiDeps, get_deps, require_user
+from src.db.models import AgentRun, Job, LlmCall
+from src.db.rows import AgentStepRow
+from src.indexing.backfill import PAGE_SIZE, RUN_QUERY, BackfillProgress
+from src.jobs.types import BackfillPageJob, DeadJob, JobCounts
+from src.llm.types import Schema
+from src.utils.console import log
+
+router = APIRouter(prefix="/api", dependencies=[Depends(require_user)], tags=["ops"])
+PROFILE_TTL = timedelta(minutes=10)
+
+
+class BackfillStatus(Schema):
+    progress: BackfillProgress
+    mailbox_total: int | None
+    percent: float | None
+    pages_last_hour: int
+    pages_last_day: int
+    eta_hours: float | None
+    deferred_until: datetime | None
+
+
+class LlmCallOut(Schema):
+    id: int
+    created_at: datetime
+    purpose: str
+    model: str
+    attempt: int
+    status: str
+    error_kind: str | None
+    error: str | None
+    latency_ms: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+
+class RunDetail(Schema):
+    run: queries.RunOut
+    steps: list[AgentStepRow]
+    llm_calls: list[LlmCallOut]
+
+
+class JobsOut(Schema):
+    counts: dict[str, JobCounts]
+    dead: list[DeadJob]
+
+
+class UsageDay(Schema):
+    day: date
+    purpose: str
+    calls: int
+    errors: int
+    input_tokens: int
+    output_tokens: int
+
+
+class _Profile(BaseModel):
+    messagesTotal: int
+
+
+class _ProfileCache:
+    """Mailbox size from Gmail, cached: it only feeds a percentage."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._value: int | None = None
+        self._at: datetime | None = None
+
+    def total(self, deps: ApiDeps) -> int | None:
+        now = deps.clock()
+        with self._lock:
+            if self._at is not None and now - self._at < PROFILE_TTL:
+                return self._value
+        try:
+            raw = deps.gmail().users().getProfile(userId="me").execute(num_retries=2)
+            value: int | None = _Profile.model_validate(raw).messagesTotal
+        except Exception as exc:  # noqa: BLE001 - a missing total only hides the percentage
+            log(f"getProfile falhou: {type(exc).__name__}: {exc}")
+            value = None
+        with self._lock:
+            self._value, self._at = value, now
+        return value
+
+
+_profile = _ProfileCache()
+
+
+def _progress(deps: ApiDeps) -> BackfillProgress:
+    run = deps.index_store.backfill_run(RUN_QUERY)
+    counts = deps.index_store.run_counts(run.id)
+    return BackfillProgress(
+        run_id=run.id, pages=run.pages, fetch_done=run.fetch_done,
+        **counts.model_dump(), jobs=deps.jobs.counts_by_kind(),
+    )
+
+
+def _status(deps: ApiDeps) -> BackfillStatus:
+    p = _progress(deps)
+    now = deps.clock()
+    with deps.sf() as s:
+        def finished_since(delta: timedelta) -> int:
+            return s.scalar(
+                select(func.count()).select_from(Job).where(
+                    Job.kind == "backfill_page", Job.status == "done", Job.run_id == p.run_id,
+                    Job.finished_at > now - delta,
+                )
+            ) or 0
+
+        hour, day = finished_since(timedelta(hours=1)), finished_since(timedelta(days=1))
+        next_at = s.scalar(
+            select(func.min(Job.run_after)).where(
+                Job.kind == "backfill_page", Job.status == "queued", Job.run_id == p.run_id
+            )
+        )
+    total = _profile.total(deps)
+    percent = None
+    eta = None
+    if total:
+        percent = round(min(100.0, 100.0 * p.emails / total), 1)
+        remaining_pages = max(0, total - p.emails) / PAGE_SIZE
+        rate = day / 24 if day else float(hour)
+        eta = round(remaining_pages / rate, 1) if rate and not p.fetch_done else None
+    if next_at is not None and next_at.tzinfo is None:
+        next_at = next_at.replace(tzinfo=now.tzinfo)
+    return BackfillStatus(
+        progress=p, mailbox_total=total, percent=100.0 if p.fetch_done else percent,
+        pages_last_hour=hour, pages_last_day=day, eta_hours=eta,
+        deferred_until=next_at if next_at is not None and next_at > now else None,
+    )
+
+
+@router.get("/backfill")
+def backfill(request: Request) -> BackfillStatus:
+    return _status(get_deps(request))
+
+
+@router.post("/backfill/start")
+def backfill_start(request: Request) -> BackfillStatus:
+    deps = get_deps(request)
+    run = deps.index_store.backfill_run(RUN_QUERY)
+    if not run.fetch_done:
+        deps.jobs.enqueue(BackfillPageJob(run_id=run.id, page_no=run.pages))
+    return _status(deps)
+
+
+@router.get("/runs")
+def runs(
+    request: Request,
+    trigger: str | None = None,
+    status: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+) -> list[queries.RunOut]:
+    stmt = select(AgentRun)
+    if trigger:
+        stmt = stmt.where(AgentRun.trigger == trigger)
+    if status:
+        stmt = stmt.where(AgentRun.status == status)
+    with get_deps(request).sf() as s:
+        return [queries.run_out(r) for r in s.scalars(stmt.order_by(AgentRun.id.desc()).limit(limit))]
+
+
+@router.get("/runs/{run_id}")
+def run_detail(run_id: int, request: Request) -> RunDetail:
+    deps = get_deps(request)
+    with deps.sf() as s:
+        run = s.get(AgentRun, run_id)
+        if run is None:
+            raise HTTPException(404, "execução não encontrada")
+        calls = s.scalars(select(LlmCall).where(LlmCall.agent_run_id == run_id).order_by(LlmCall.id))
+        call_out = [
+            LlmCallOut(
+                id=c.id, created_at=c.created_at, purpose=c.purpose, model=c.model, attempt=c.attempt,
+                status=c.status, error_kind=c.error_kind, error=c.error, latency_ms=c.latency_ms,
+                input_tokens=c.input_tokens, output_tokens=c.output_tokens, total_tokens=c.total_tokens,
+            )
+            for c in calls
+        ]
+        out = queries.run_out(run)
+    return RunDetail(run=out, steps=list(Trail(deps.sf).steps(run_id)), llm_calls=call_out)
+
+
+@router.get("/jobs")
+def jobs(request: Request, limit: int = Query(50, ge=1, le=500)) -> JobsOut:
+    store = get_deps(request).jobs
+    return JobsOut(counts=store.counts_by_kind(), dead=store.dead(limit))
+
+
+@router.post("/jobs/{job_id}/requeue", status_code=204)
+def requeue(job_id: int, request: Request) -> None:
+    if not get_deps(request).jobs.requeue(job_id):
+        raise HTTPException(409, "o job não está morto")
+
+
+@router.get("/usage")
+def usage(request: Request, days: int = Query(7, ge=1, le=90)) -> list[UsageDay]:
+    deps = get_deps(request)
+    since = deps.clock() - timedelta(days=days)
+    day = func.date(LlmCall.created_at)
+    with deps.sf() as s:
+        rows = s.execute(
+            select(
+                day, LlmCall.purpose, func.count(),
+                func.sum(case((LlmCall.status == "error", 1), else_=0)),
+                func.sum(LlmCall.input_tokens), func.sum(LlmCall.output_tokens),
+            )
+            .where(LlmCall.created_at >= since)
+            .group_by(day, LlmCall.purpose)
+            .order_by(day.desc(), LlmCall.purpose)
+        ).all()
+    return [
+        UsageDay(
+            day=d if isinstance(d, date) else date.fromisoformat(str(d)), purpose=p, calls=n,
+            errors=int(e or 0), input_tokens=int(i or 0), output_tokens=int(o or 0),
+        )
+        for d, p, n, e, i, o in rows
+    ]
