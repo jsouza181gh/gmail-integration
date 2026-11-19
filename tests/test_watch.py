@@ -24,7 +24,7 @@ def make_service(history_id="100", expiration="1000"):
 def test_watch_body():
     svc = make_service()
     resp = start_gmail_watch(svc)
-    assert resp["historyId"] == "100"
+    assert resp.historyId == "100"
     name, kw = svc.calls[0]
     assert name == "users.watch"
     assert kw["userId"] == "me"

@@ -8,6 +8,7 @@ database on every batch, so changes apply without a restart.
 import os
 from collections.abc import Sequence
 from datetime import date
+from typing import Protocol
 
 from pydantic import TypeAdapter
 
@@ -60,11 +61,18 @@ class _EmailIn(Schema):
 _EMAILS_IN = TypeAdapter(list[_EmailIn])
 
 
-__all__ = ["Abort", "BatchResult", "Classification", "Classifier", "Item", "classify_pending"]
+__all__ = [
+    "Abort", "BatchResult", "Classification", "Classifier", "EmailClassifier", "Item",
+    "classify_pending",
+]
 
 
 class Abort(Exception):
     """Stop the run; state is saved and a re-run resumes."""
+
+
+class EmailClassifier(Protocol):
+    def classify(self, rows: Sequence[EmailRow]) -> dict[str, Classification]: ...
 
 
 def _parse_deadline(value: str | None) -> date | None:
@@ -123,7 +131,7 @@ class Classifier:
         return out
 
 
-def classify_pending(store: Store, classifier: Classifier, run_id: int) -> None:
+def classify_pending(store: Store, classifier: EmailClassifier, run_id: int) -> None:
     failures = 0
     while True:
         rows = store.pending(run_id, BATCH_SIZE)
