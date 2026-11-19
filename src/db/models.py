@@ -18,6 +18,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from src.db.vector import Vector
+
 
 class Base(DeclarativeBase):
     pass
@@ -54,6 +56,10 @@ class Email(Base):
     has_document: Mapped[bool | None] = mapped_column(Boolean)
     ephemeral: Mapped[bool | None] = mapped_column(Boolean)
     category_set_id: Mapped[int | None] = mapped_column(ForeignKey("category_sets.id"))
+    # plain-text body (HTML reduced), stored by the indexer
+    body: Mapped[str | None] = mapped_column(Text)
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    index_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -368,6 +374,18 @@ class Job(Base):
             "kind <> 'execute_action' OR action_id IS NOT NULL",
             name="ck_jobs_execute_action_has_action",
         ),
+        CheckConstraint(
+            "kind <> 'index_email' OR email_id IS NOT NULL",
+            name="ck_jobs_index_email_has_email",
+        ),
+        CheckConstraint(
+            "kind <> 'index_attachment' OR attachment_id IS NOT NULL",
+            name="ck_jobs_index_attachment_has_attachment",
+        ),
+        CheckConstraint(
+            "kind <> 'backfill_page' OR (run_id IS NOT NULL AND page_no IS NOT NULL)",
+            name="ck_jobs_backfill_page_has_page",
+        ),
         Index("ix_jobs_claim", "status", "priority", "run_after"),
     )
 
@@ -381,11 +399,80 @@ class Job(Base):
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
     action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
+    attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"))
+    page_no: Mapped[int | None] = mapped_column(Integer)
     last_error: Mapped[str | None] = mapped_column(Text)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_by: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# --- indexing: embeddings and attachment documents ---------------------------
+
+HNSW_OPS = {"embedding": "vector_cosine_ops"}
+
+
+class EmailEmbedding(Base):
+    __tablename__ = "email_embeddings"
+    __table_args__ = (
+        Index(
+            "ix_email_embeddings_hnsw", "embedding",
+            postgresql_using="hnsw", postgresql_ops=HNSW_OPS,
+        ),
+    )
+
+    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), primary_key=True)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding: Mapped[tuple[float, ...]] = mapped_column(Vector(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Attachment(Base):
+    """A document attached to an email: metadata, extracted text, vector.
+
+    The file itself is never stored; `part_id` locates it in the message
+    (Gmail's attachmentId changes between reads, the partId does not).
+    """
+
+    __tablename__ = "attachments"
+    __table_args__ = (
+        UniqueConstraint("email_id", "part_id"),
+        Index("ix_attachments_status", "status"),
+        Index(
+            "ix_attachments_hnsw", "embedding",
+            postgresql_using="hnsw", postgresql_ops=HNSW_OPS,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), nullable=False, index=True)
+    part_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    skip_reason: Mapped[str | None] = mapped_column(String(64))
+    doc_class: Mapped[str | None] = mapped_column(String(16))
+    doc_type: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    issuer: Mapped[str | None] = mapped_column(Text)
+    amount_cents: Mapped[int | None] = mapped_column(BigInteger)
+    issued_on: Mapped[calendar_date | None] = mapped_column(Date)
+    due_on: Mapped[calendar_date | None] = mapped_column(Date)
+    barcode: Mapped[str | None] = mapped_column(String(64))
+    text: Mapped[str | None] = mapped_column(Text)
+    embedding: Mapped[tuple[float, ...] | None] = mapped_column(Vector())
+    embedding_model: Mapped[str | None] = mapped_column(String(64))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class LlmCallEmail(Base):
