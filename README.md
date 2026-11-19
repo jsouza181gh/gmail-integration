@@ -144,6 +144,33 @@ docker compose exec worker python -m src.cli.enqueue --days 7                   
 - **Alertas** por e-mail (`[gmail-integration] …`, label `Sistema/Alerta`, no máximo 1 por tipo a cada 15 min): job em dead-letter, 3 execuções do agente falhando seguidas, 3 syncs falhando seguidos, falha na renovação do watch, backfill concluído.
 - Env: `WORKER_POLL_S` (5), `WORKER_STALE_MIN` (15), `JOB_MAX_ATTEMPTS` (5), `LABELS_DRY_RUN=1` (labels só no log).
 
+## API do painel (autenticada)
+
+Tudo sob `/api`, mesma origem do front (nginx serve o front em `/` e repassa `/api` e `/webhooks`), sem CORS. A API só lê, registra decisões e enfileira jobs: não chama LLM, e do Gmail só lê (download de anexo, total da caixa).
+
+- **Login:** senha → TOTP (ou recovery code). Usuário único, criado na VPS. Access JWT de 10 min e refresh de 14 dias (rotacionado a cada uso; reuso de um refresh antigo derruba a família inteira e manda alerta) em cookies `HttpOnly; Secure; SameSite=Strict`.
+- **Bloqueios:** 3 falhas de um IP em 24 h → IP bloqueado; falhas de 3 IPs em 24 h → login fechado para todos. Só a CLI desbloqueia.
+- **Superfície:** CSRF (cookie `csrf` + header `X-CSRF-Token`) e `Origin` em toda escrita; HSTS, CSP, `X-Frame-Options`; rate limit 60/min por rota (10/min no login); `/docs` desligado em produção.
+- **Endpoints:** `auth/*`, `emails` (+ `relevant`, detalhe, `reclassify`), `categories`, `actions` (+ `approve`/`reject` em lote), `documents` (+ link de download de 60 s), `backfill` (progresso, %, ETA, pausa por cota) e `backfill/start`, `runs`, `jobs` (+ `requeue`), `usage`, `security/events`, `security/blocks`, `notifications`, `agent/*` (versões do prompt com rollback, políticas, regras, KB, `llm_mode`, auditoria).
+
+Ligar na VPS:
+
+1. No `.env`: `JWT_SECRET` (`python -c "import secrets;print(secrets.token_urlsafe(48))"`), `APP_SECRET` (`python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"`), `APP_ORIGIN=https://<SEU_DOMINIO>`, `APP_ENV=production`. Sem `JWT_SECRET` a API do painel fica desligada (webhook segue funcionando).
+2. `docker compose up -d` e crie o usuário: `docker compose exec api python -m src.cli.create_user <usuario>` — escaneie o QR e guarde os 10 recovery codes.
+3. Nginx (no mesmo `server` HTTPS do webhook):
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Desbloqueio: `docker compose exec api python -m src.cli.unlock --list | --ip <IP> | --global`.
+
+**Webhook com OIDC (recomendado):** na assinatura push do Pub/Sub, marque *Enable authentication*, escolha uma service account e use como audience `https://<SEU_DOMINIO>/webhooks/gmail`. No `.env`: `PUBSUB_AUDIENCE` (a mesma URL) e `PUBSUB_SERVICE_ACCOUNT` (o e-mail da service account). Com os dois definidos, o `?token=` deixa de valer.
+
 ## Backfill e documentos
 
 Indexa o histórico inteiro (menos chats, rascunhos, spam e lixeira), do mais novo para o mais antigo: corpo em texto, classificação, vetor (`gemini-embedding-2`, `vector(1536)` no pgvector) e anexos. E-mails novos são indexados pelo job `index_email` que o sync enfileira.

@@ -39,11 +39,15 @@ def main() -> None:
     from src.agent.wiring import Agent
     from src.alerts.service import FailureStreak, build_alert_service
     from src.indexing.wiring import Indexing
-    from src.llm.config import build_gateway
+    from src.agent.settings import mode_source
+    from src.llm.config import build_gateway, load_llm_config
     from src.llm.recorder import DbCallRecorder
 
-    # one gateway per process: free-tier pacing is shared by every job kind
-    gateway = build_gateway(DbCallRecorder(store.sf))
+    # one gateway per process: free-tier pacing is shared by every job kind;
+    # the panel can switch free/fast at runtime (app_settings.llm_mode)
+    gateway = build_gateway(
+        DbCallRecorder(store.sf), mode_source(store.sf, load_llm_config().mode)
+    )
     agent = Agent(store, jobs, gateway)
     indexing = Indexing(store, jobs, gateway)
     alerts = build_alert_service(store)

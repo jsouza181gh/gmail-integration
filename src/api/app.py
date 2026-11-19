@@ -14,7 +14,10 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from pydantic import BaseModel, ConfigDict
 
+from src.api.deps import ApiDeps
 from src.api.log_filters import install_access_log_filter
+from src.api.pubsub_auth import PubSubVerifier
+from src.api.security import RateLimiter, security_middleware
 from src.utils.console import log
 
 
@@ -68,7 +71,11 @@ def create_app(
     renew: Callable[[], None] | None = None,
     renew_interval_s: float = 86400,
     retry_s: float = 3600,
+    api: ApiDeps | None = None,
+    pubsub: PubSubVerifier | None = None,
 ) -> FastAPI:
+    """`api` enables the authenticated panel API under /api; without it only
+    the webhook and /healthz exist (e.g. before the auth secrets are set)."""
     install_access_log_filter()
 
     @asynccontextmanager
@@ -89,11 +96,27 @@ def create_app(
             if task:
                 task.cancel()
 
-    app = FastAPI(lifespan=lifespan)
+    hide_docs = api is not None and api.settings.production
+    app = FastAPI(
+        lifespan=lifespan,
+        docs_url=None if hide_docs else "/docs",
+        redoc_url=None if hide_docs else "/redoc",
+        openapi_url=None if hide_docs else "/openapi.json",
+    )
+    app.middleware("http")(security_middleware(RateLimiter()))
+    if api is not None:
+        from src.api.routes import actions, agent, auth, documents, mail, ops, security
+
+        app.state.deps = api
+        for module in (auth, mail, actions, documents, ops, security, agent):
+            app.include_router(module.router)
 
     @app.post("/webhooks/gmail")
     async def gmail_webhook(request: Request, background: BackgroundTasks) -> Response:
-        if token is not None:
+        if pubsub is not None:  # OIDC replaces the query token once configured
+            if not pubsub.ok(request.headers.get("authorization")):
+                return Response(status_code=401)
+        elif token is not None:
             given = request.query_params.get("token", "")
             if not hmac.compare_digest(given.encode(), token.encode()):
                 return Response(status_code=401)
@@ -154,9 +177,22 @@ def build_app() -> FastAPI:
             raise
         coordinator.trigger()
 
+    api: ApiDeps | None = None
+    if os.getenv("JWT_SECRET"):
+        from src.auth.config import load_auth_settings
+
+        api = ApiDeps.build(store.sf, load_auth_settings(), alerts=alerts, gmail=get_gmail_service)
+    else:
+        log("JWT_SECRET ausente: API do painel desligada (só webhook e /healthz)")
+
+    audience, account = os.getenv("PUBSUB_AUDIENCE"), os.getenv("PUBSUB_SERVICE_ACCOUNT")
+    pubsub = PubSubVerifier(audience, account) if audience and account else None
+
     return create_app(
         trigger=coordinator.trigger,
         token=os.getenv("WEBHOOK_TOKEN") or None,
+        pubsub=pubsub,
         on_startup=start_watch,
         renew=renew_and_sync,
+        api=api,
     )

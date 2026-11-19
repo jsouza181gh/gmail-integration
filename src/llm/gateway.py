@@ -219,6 +219,7 @@ class LLMGateway:
         chat_factory: Callable[[str], ChatModelLike] | None = None,
         embed_model: str = DEFAULT_EMBED_MODEL,
         embedder: EmbedderLike | None = None,
+        mode_source: Callable[[], Literal["free", "fast"]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -231,6 +232,7 @@ class LLMGateway:
         self.recorder = recorder
         self._chat_factory = chat_factory or _default_chat
         self.embed_model = embed_model
+        self.mode_source = mode_source  # runtime override (app_settings.llm_mode)
         self._embedder = embedder or GenAIEmbedder()
         self._chats: dict[str, ChatModelLike] = {}
         self._sleep = sleep
@@ -243,7 +245,8 @@ class LLMGateway:
         return self._chats[model]
 
     def _pace(self) -> None:
-        if self.mode != "free" or self._last_call is None:
+        mode = self.mode_source() if self.mode_source is not None else self.mode
+        if mode != "free" or self._last_call is None:
             return
         wait = self.min_interval_s - (self._clock() - self._last_call)
         if wait > 0:

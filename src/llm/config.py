@@ -1,5 +1,6 @@
 """Gateway configuration from the environment."""
 import os
+from collections.abc import Callable
 from typing import Literal
 
 from src.llm.gateway import DEFAULT_EMBED_MODEL, LLMGateway
@@ -34,7 +35,10 @@ def load_llm_config() -> LLMConfig:
     )
 
 
-def build_gateway(recorder: CallRecorder | None = None) -> LLMGateway:
+def build_gateway(
+    recorder: CallRecorder | None = None,
+    mode_source: Callable[[], Literal["free", "fast"]] | None = None,
+) -> LLMGateway:
     cfg = load_llm_config()
     return LLMGateway(
         cfg.models,
@@ -42,5 +46,6 @@ def build_gateway(recorder: CallRecorder | None = None) -> LLMGateway:
         rpm=cfg.rpm,
         max_attempts=cfg.max_attempts,
         embed_model=cfg.embed_model,
+        mode_source=mode_source,
         recorder=recorder,
     )

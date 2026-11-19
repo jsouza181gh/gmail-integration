@@ -460,3 +460,19 @@ def test_parts_only_on_human() -> None:
 
     with pytest.raises(ValidationError):
         ChatMessage(role="system", content="x", parts=(BinaryPart(mime_type="image/png", data=b"x"),))
+
+
+def test_mode_source_switches_pacing_at_runtime() -> None:
+    from typing import Literal
+
+    mode: list[Literal["free", "fast"]] = ["fast"]
+    clock = FakeClock()
+    g = LLMGateway(("m1",), mode="free", rpm=60, recorder=ListRecorder(),
+                   chat_factory={"m1": FakeChat([Out(x=1), Out(x=2), Out(x=3)])}.__getitem__,
+                   sleep=clock.sleep, clock=clock.now, mode_source=lambda: mode[0])
+    g.generate_structured(P, Out)
+    g.generate_structured(P, Out)
+    assert clock.slept == []  # fast: no pacing
+    mode[0] = "free"
+    g.generate_structured(P, Out)
+    assert clock.slept == [1.0]
