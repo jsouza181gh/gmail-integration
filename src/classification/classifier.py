@@ -1,185 +1,143 @@
-"""LLM email classification: batching, retries, model fallback.
+"""LLM email classification over the gateway: batching and give-up.
 
 One stateless LLM call per batch of pending emails; every step is persisted
-through Store, so a crash resumes where it stopped.
+through Store, so a crash resumes where it stopped. Retries, pacing and model
+fallback live in the gateway. Taxonomy and preferences are re-read from the
+database on every batch, so changes apply without a restart.
 """
-import json
 import os
-import random
-import re
-import time
-from typing import Literal
+from collections.abc import Sequence
+from datetime import date
+from typing import Protocol
 
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import BaseModel, Field
+from pydantic import TypeAdapter
 
+from src.classification.prompt import build_system_prompt
+from src.classification.taxonomy import Classification
+from src.db.rows import EmailRow
+from src.db.store import Store
+from src.llm.errors import LLMFatalError
+from src.llm.types import (
+    CallContext,
+    ChatMessage,
+    Prompt,
+    Schema,
+    StructuredGenerator,
+)
 from src.utils.console import log
 
-load_dotenv()
-
 BATCH_SIZE = int(os.getenv("CLASSIFY_BATCH_SIZE", "25"))
-MODELS = [
-    m.strip()
-    for m in os.getenv("GEMINI_MODELS", "gemini-3.5-flash-lite").split(",")
-    if m.strip()
-]
-MIN_CALL_INTERVAL_S = float(os.getenv("MIN_CALL_INTERVAL_S", "4"))
-MAX_CALL_ATTEMPTS = 8        # per batch, across models
 MAX_EMAIL_ATTEMPTS = 4       # per email, across batches
 MAX_CONSECUTIVE_FAILURES = 3  # failed batches in a row before aborting
-BACKOFF_BASE_S = 3
-BACKOFF_MAX_S = 120
-
-Category = Literal[
-    "Urgente",
-    "Trabalho",
-    "Financeiro",
-    "Pessoal",
-    "Notificações",
-    "Newsletter/Promoções",
-    "Outros",
-]
-CATEGORY_ORDER = list(Category.__args__) + ["Não classificado"]
-
-SYSTEM_PROMPT = """You classify emails. For EVERY email received, return exactly
-one item with its id, one category and a short reason (max 12 words, pt-BR).
-Categories:
-- Urgente: needs action or reply soon (deadlines, security alerts, payment
-  problems, direct questions from real people, meeting changes).
-- Trabalho: work-related, not urgent (projects, clients, team threads).
-- Financeiro: invoices, receipts, bank, billing, subscription charges.
-- Pessoal: friends, family, personal matters.
-- Notificações: automated alerts from apps, services, social networks, job alerts.
-- Newsletter/Promoções: marketing, newsletters, offers, mailing lists.
-- Outros: anything that fits none of the above.
-Never invent ids. Use only the ids you were given."""
+GIVE_UP_CATEGORY = "Não classificado"
+PREFERENCE_SCOPE = "classification"
+REASON_MAX = 200
 
 
-class Item(BaseModel):
+class Item(Schema):
+    """What the model returns per email (category validated afterwards)."""
+
     id: str
-    category: Category
-    reason: str = Field(description="short reason, max 12 words, pt-BR")
+    category: str
+    reason: str
+    is_relevant: bool
+    deadline: str | None
+    has_document: bool
+    ephemeral: bool
 
 
-class BatchResult(BaseModel):
+class BatchResult(Schema):
     items: list[Item]
+
+
+class _EmailIn(Schema):
+    id: str
+    sender: str | None
+    subject: str | None
+    date: str | None
+    snippet: str | None
+
+
+_EMAILS_IN = TypeAdapter(list[_EmailIn])
+
+
+__all__ = [
+    "Abort", "BatchResult", "Classification", "Classifier", "EmailClassifier", "Item",
+    "classify_pending",
+]
 
 
 class Abort(Exception):
     """Stop the run; state is saved and a re-run resumes."""
 
 
-# --- LLM classification -----------------------------------------------------
-
-def _error_kind(exc):
-    text = f"{type(exc).__name__} {exc}"
-    if "429" in text or "RESOURCE_EXHAUSTED" in text:
-        return "rate"
-    if any(
-        s in text
-        for s in (
-            "500", "502", "503", "504", "UNAVAILABLE", "INTERNAL",
-            "DEADLINE", "imeout", "Connect", "Connection", "Remote",
-        )
-    ):
-        return "transient"
-    if any(s in text for s in ("ValidationError", "OutputParser", "JSONDecode")):
-        return "bad_output"
-    return "fatal"
+class EmailClassifier(Protocol):
+    def classify(self, rows: Sequence[EmailRow]) -> dict[str, Classification]: ...
 
 
-def _retry_delay(exc):
-    text = str(exc)
-    for pattern in (
-        r"retry in ([\d.]+)\s*s",
-        r"retryDelay['\"]?:\s*['\"]([\d.]+)s",
-    ):
-        m = re.search(pattern, text, re.I)
-        if m:
-            return float(m.group(1))
-    return None
-
-
-def _sleep(seconds, why):
-    seconds = max(1.0, seconds) + random.uniform(0, 2)
-    log(f"{why}; aguardando {seconds:.0f}s")
-    time.sleep(seconds)
+def _parse_deadline(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        return None
 
 
 class Classifier:
-    def __init__(self):
-        self.llms = [
-            ChatGoogleGenerativeAI(model=m, max_retries=0, timeout=90)
-            .with_structured_output(BatchResult)
-            for m in MODELS
-        ]
-        self.last_call = 0.0
+    def __init__(self, store: Store, gateway: StructuredGenerator) -> None:
+        self.store = store
+        self.gateway = gateway
 
-    def _pace(self):
-        wait = MIN_CALL_INTERVAL_S - (time.monotonic() - self.last_call)
-        if wait > 0:
-            time.sleep(wait)
-
-    def classify(self, rows):
-        payload = json.dumps(
+    def classify(self, rows: Sequence[EmailRow]) -> dict[str, Classification]:
+        taxonomy = self.store.active_taxonomy()
+        if taxonomy is None:
+            raise Abort("nenhuma taxonomia ativa; rode as migrações (alembic upgrade head)")
+        preferences = self.store.active_preferences(PREFERENCE_SCOPE)
+        payload = _EMAILS_IN.dump_json(
             [
-                {
-                    "id": r["id"],
-                    "from": r["sender"],
-                    "subject": r["subject"],
-                    "date": r["date"],
-                    "snippet": r["snippet"],
-                }
+                _EmailIn(id=r.id, sender=r.sender, subject=r.subject, date=r.date, snippet=r.snippet)
                 for r in rows
-            ],
-            ensure_ascii=False,
+            ]
+        ).decode()
+        prompt = Prompt(
+            purpose="classify",
+            messages=(
+                ChatMessage(role="system", content=build_system_prompt(taxonomy, preferences)),
+                ChatMessage(role="human", content=payload),
+            ),
+            context=CallContext(email_ids=tuple(r.id for r in rows)),
         )
-        messages = [("system", SYSTEM_PROMPT), ("human", payload)]
-        wanted = {r["id"] for r in rows}
-        last_exc = None
+        try:
+            result = self.gateway.generate_structured(prompt, BatchResult)
+        except LLMFatalError as exc:
+            raise Abort(str(exc)) from exc
 
-        for attempt in range(MAX_CALL_ATTEMPTS):
-            idx = attempt % len(self.llms)
-            self._pace()
-            try:
-                result = self.llms[idx].invoke(messages)
-                self.last_call = time.monotonic()
-                if result is None:
-                    raise ValueError("ValidationError: empty structured output")
-                return {
-                    i.id: (i.category, i.reason.strip()[:200])
-                    for i in result.items
-                    if i.id in wanted
-                }
-            except Exception as exc:  # noqa: BLE001 - classified below
-                self.last_call = time.monotonic()
-                last_exc = exc
-                kind = _error_kind(exc)
-                model = MODELS[idx]
-                if kind == "fatal":
-                    raise Abort(f"erro não recuperável ({model}): {exc}") from exc
-                if kind == "rate":
-                    delay = _retry_delay(exc)
-                    if delay is None:
-                        delay = min(BACKOFF_BASE_S * 2 ** attempt, BACKOFF_MAX_S)
-                    _sleep(delay + 1, f"429 em {model}")
-                elif kind == "transient":
-                    delay = min(BACKOFF_BASE_S * 2 ** attempt, BACKOFF_MAX_S)
-                    _sleep(delay, f"{str(exc)[:60]!r} em {model}")
-                else:  # bad_output: retry quickly
-                    log(f"saída inválida de {model}: {str(exc)[:80]!r}; tentando de novo")
-
-        raise RuntimeError(f"esgotou {MAX_CALL_ATTEMPTS} tentativas: {last_exc}")
+        wanted = {r.id for r in rows}
+        valid = set(taxonomy.names)
+        out: dict[str, Classification] = {}
+        for i in result.parsed.items:
+            if i.id not in wanted or i.category not in valid:
+                continue
+            out[i.id] = Classification(
+                category=i.category,
+                reason=i.reason.strip()[:REASON_MAX],
+                is_relevant=i.is_relevant,
+                deadline=_parse_deadline(i.deadline),
+                has_document=i.has_document,
+                ephemeral=i.ephemeral,
+                category_set_id=taxonomy.set_id,
+            )
+        return out
 
 
-def classify_pending(store, classifier, run_id):
+def classify_pending(store: Store, classifier: EmailClassifier, run_id: int) -> None:
     failures = 0
     while True:
         rows = store.pending(run_id, BATCH_SIZE)
         if not rows:
             return
-        ids = [r["id"] for r in rows]
+        ids = [r.id for r in rows]
         try:
             results = classifier.classify(rows)
         except Abort:
@@ -195,15 +153,11 @@ def classify_pending(store, classifier, run_id):
             continue
 
         failures = 0
-        store.save_classifications(
-            (eid, cat, reason) for eid, (cat, reason) in results.items()
-        )
+        store.save_classifications(results)
         missing = [i for i in ids if i not in results]
         if missing:
-            store.bump_attempts(missing, "sem resposta do modelo")
-            store.give_up(
-                MAX_EMAIL_ATTEMPTS, "Não classificado", "modelo não respondeu"
-            )
+            store.bump_attempts(missing, "sem resposta válida do modelo")
+            store.give_up(MAX_EMAIL_ATTEMPTS, GIVE_UP_CATEGORY, "modelo não respondeu")
         log(
             f"lote: {len(results)}/{len(ids)} classificados; "
             f"{store.count_pending(run_id)} pendentes"

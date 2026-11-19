@@ -4,7 +4,7 @@ from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from googleapiclient.discovery import Resource, build
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -13,7 +13,7 @@ TOKEN_PATH = Path(
 )
 
 
-def save_credentials(creds: Credentials):
+def save_credentials(creds: Credentials) -> None:
     TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     temp_path = TOKEN_PATH.with_suffix(".tmp")
@@ -29,7 +29,7 @@ def save_credentials(creds: Credentials):
         TOKEN_PATH.chmod(0o600)
 
 
-def get_gmail_service():
+def get_gmail_service() -> Resource:
     if not TOKEN_PATH.exists():
         raise RuntimeError(
             "Token OAuth não encontrado. "

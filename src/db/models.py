@@ -1,13 +1,16 @@
+from datetime import date as calendar_date
 from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -42,6 +45,12 @@ class Email(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_relevant: Mapped[bool | None] = mapped_column(Boolean)
+    deadline: Mapped[calendar_date | None] = mapped_column(Date)
+    has_document: Mapped[bool | None] = mapped_column(Boolean)
+    ephemeral: Mapped[bool | None] = mapped_column(Boolean)
+    category_set_id: Mapped[int | None] = mapped_column(ForeignKey("category_sets.id"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -73,3 +82,106 @@ class WatchState(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+# --- taxonomy (versioned) -----------------------------------------------------
+
+class CategorySet(Base):
+    __tablename__ = "category_sets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CategoryFlag(Base):
+    __tablename__ = "category_flags"
+    __table_args__ = (UniqueConstraint("set_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    set_id: Mapped[int] = mapped_column(ForeignKey("category_sets.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(32), nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class Category(Base):
+    __tablename__ = "categories"
+    __table_args__ = (UniqueConstraint("set_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    set_id: Mapped[int] = mapped_column(ForeignKey("category_sets.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    color: Mapped[str | None] = mapped_column(String(16))
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class CategoryExample(Base):
+    __tablename__ = "category_examples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+# --- knowledge base -----------------------------------------------------------
+
+class KbEntry(Base):
+    __tablename__ = "kb_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# --- LLM call log -------------------------------------------------------------
+
+class LlmCall(Base):
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error_kind: Mapped[str | None] = mapped_column(String(16))
+    error: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cached_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    reasoning_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    audio_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_text: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"))
+
+
+class LlmCallMessage(Base):
+    __tablename__ = "llm_call_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    call_id: Mapped[int] = mapped_column(ForeignKey("llm_calls.id"), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class LlmCallEmail(Base):
+    __tablename__ = "llm_call_emails"
+
+    call_id: Mapped[int] = mapped_column(ForeignKey("llm_calls.id"), primary_key=True)
+    email_id: Mapped[str] = mapped_column(String(64), primary_key=True)

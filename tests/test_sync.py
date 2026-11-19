@@ -3,9 +3,9 @@ import time
 
 import pytest
 
-from src.classification.classifier import Abort
+from src.classification.classifier import Abort, Classification
 from src.db.store import Store
-from src.services.sync import WEBHOOK_QUERY, SyncCoordinator, sync_inbox
+from src.services.sync import WEBHOOK_QUERY, SyncCoordinator, SyncResult, sync_inbox
 from tests.fakes import FakeService, http_error
 
 
@@ -18,7 +18,13 @@ class FakeClassifier:
         self.calls += 1
         if self.error:
             raise self.error
-        return {r["id"]: ("Outros", "teste") for r in rows}
+        return {
+            r.id: Classification(
+                category="Social", reason="teste", is_relevant=False, deadline=None,
+                has_document=False, ephemeral=False, category_set_id=1,
+            )
+            for r in rows
+        }
 
 
 def message(mid):
@@ -29,7 +35,7 @@ def message(mid):
             "headers": [
                 {"name": "From", "value": f"{mid}@x.com"},
                 {"name": "Subject", "value": f"assunto {mid}"},
-                {"name": "Date", "value": "Mon, 16 Nov 2026"},
+                {"name": "Date", "value": "Mon, 16 Nov 2026 10:00:00 +0000"},
             ]
         },
     }
@@ -64,19 +70,20 @@ def store(session_factory):
 
 
 def run_of(store):
-    return store.get_or_create_run(WEBHOOK_QUERY)["id"]
+    return store.get_or_create_run(WEBHOOK_QUERY).id
 
 
 def test_ingests_and_classifies_new_message(store):
     svc = make_service(lambda **kw: history_response(["m1", "m2"], "20"))
     result = sync_inbox(store, svc, FakeClassifier())
 
-    assert result == {"ingested": 2, "pending": 0}
+    assert result == SyncResult(ingested=2, pending=0)
     rows = store.report_rows(run_of(store))
-    assert {r["id"] for r in rows} == {"m1", "m2"}
-    assert all(r["category"] == "Outros" for r in rows)
-    assert rows[0]["sender"].endswith("@x.com")
-    assert store.get_watch_state()["history_id"] == "20"
+    assert {r.id for r in rows} == {"m1", "m2"}
+    assert all(r.category == "Social" for r in rows)
+    assert rows[0].sender.endswith("@x.com")
+    assert rows[0].received_at is not None
+    assert store.get_watch_state().history_id == "20"
     name, kw = svc.calls[0]
     assert (name, kw["startHistoryId"], kw["labelId"]) == ("history.list", "10", "INBOX")
     assert kw["historyTypes"] == ["messageAdded"]
@@ -88,7 +95,7 @@ def test_duplicate_notification_no_duplicates(store):
     sync_inbox(store, svc, clf)
     second = sync_inbox(store, svc, clf)
 
-    assert second == {"ingested": 0, "pending": 0}
+    assert second == SyncResult(ingested=0, pending=0)
     assert len(store.report_rows(run_of(store))) == 1
     assert clf.calls == 1
 
@@ -98,9 +105,9 @@ def test_deleted_message_is_skipped(store):
         lambda **kw: history_response(["m1", "m2"], "20"), gone={"m2"}
     )
     result = sync_inbox(store, svc, FakeClassifier())
-    assert result["ingested"] == 1
-    assert {r["id"] for r in store.report_rows(run_of(store))} == {"m1"}
-    assert store.get_watch_state()["history_id"] == "20"
+    assert result.ingested == 1
+    assert {r.id for r in store.report_rows(run_of(store))} == {"m1"}
+    assert store.get_watch_state().history_id == "20"
 
 
 def test_history_expired_falls_back(store):
@@ -114,8 +121,8 @@ def test_history_expired_falls_back(store):
     )
     result = sync_inbox(store, svc, FakeClassifier())
 
-    assert result["ingested"] == 1
-    assert store.get_watch_state()["history_id"] == "500"
+    assert result.ingested == 1
+    assert store.get_watch_state().history_id == "500"
     listing = [kw for name, kw in svc.calls if name == "messages.list"][0]
     assert listing["q"] == "in:inbox newer_than:7d"
 
@@ -123,13 +130,13 @@ def test_history_expired_falls_back(store):
 def test_llm_abort_keeps_pending_and_advances_cursor(store):
     svc = make_service(lambda **kw: history_response(["m1"], "20"))
     first = sync_inbox(store, svc, FakeClassifier(error=Abort("llm fora")))
-    assert first == {"ingested": 1, "pending": 1}
-    assert store.get_watch_state()["history_id"] == "20"
+    assert first == SyncResult(ingested=1, pending=1)
+    assert store.get_watch_state().history_id == "20"
 
     empty = make_service(lambda **kw: history_response([], "20"))
     second = sync_inbox(store, empty, FakeClassifier())
-    assert second == {"ingested": 0, "pending": 0}
-    assert store.report_rows(run_of(store))[0]["category"] == "Outros"
+    assert second == SyncResult(ingested=0, pending=0)
+    assert store.report_rows(run_of(store))[0].category == "Social"
 
 
 def test_sync_without_watch_state_raises(session_factory):
