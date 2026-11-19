@@ -15,12 +15,15 @@ class Schema(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+JsonArgs = dict[str, JsonValue]
+
+
 class ToolCallRequest(Schema):
     """One tool call the model asked for (args already parsed from JSON)."""
 
     id: str
     name: str
-    args: dict[str, JsonValue]
+    args: JsonArgs
 
 
 class ChatMessage(Schema):

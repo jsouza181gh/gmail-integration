@@ -1,5 +1,5 @@
 """Typed fakes for the agent ports and a context builder for tests."""
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -138,6 +138,7 @@ def make_ctx(
     email_id: str | None = "a",
     trigger: Trigger = "webhook",
     caller: FakeToolCaller | None = None,
+    extra: Mapping[str, object] | None = None,
     **deps: object,
 ) -> AgentContext:
     fields: dict[str, object] = {
@@ -152,5 +153,6 @@ def make_ctx(
         "policy": SuggestAll(),
         "kb": NoKb(),
     }
+    fields.update(extra or {})
     fields.update(deps)
     return AgentContext.model_validate(fields)

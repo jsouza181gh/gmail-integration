@@ -66,21 +66,21 @@ def secret(runtime: ToolRuntime[PeekCtx, PeekState]) -> tuple[str, StateUpdate |
     return "planned", None
 
 
-def _tool(t: object, *, planned_only: bool = False) -> AgentTool[PeekCtx, PeekState]:
+def _tool(t: object, *, planned: bool = False) -> AgentTool[PeekCtx, PeekState]:
     from langchain_core.tools import BaseTool
 
     assert isinstance(t, BaseTool)
     return AgentTool(
         t,
         context_of=lambda c: PeekCtx(email_id=c.email_id or ""),
-        state_of=lambda s: PeekState(classification=s.emails["a"].classification),
+        state_of=lambda c, s: PeekState(classification=s.emails["a"].classification),
         contexts=frozenset({"webhook"}),
-        planned_only=planned_only,
+        offered=frozenset() if planned else None,
     )
 
 
 REGISTRY = Registry(
-    [_tool(peek), _tool(mark), _tool(explode), _tool(secret, planned_only=True)]
+    [_tool(peek), _tool(mark), _tool(explode), _tool(secret, planned=True)]
 )
 
 

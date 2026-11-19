@@ -69,7 +69,8 @@ class ToolExecutor:
         entry = self.registry.get(call.name)
         if entry is None:
             return self._fail(step_id, call, f"a tool '{call.name}' não existe")
-        if ctx.run.trigger not in entry.contexts or (source == "model" and entry.planned_only):
+        allowed = entry.offered if source == "model" else entry.contexts
+        if ctx.run.trigger not in allowed:
             return self._fail(step_id, call, f"a tool '{call.name}' não disponível aqui")
 
         try:

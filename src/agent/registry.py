@@ -2,7 +2,8 @@
 
 A tool declares `runtime: ToolRuntime[C, S]` with small schemas `C`/`S`;
 `AgentTool` holds the projections from the run's `AgentContext`/`AgentState`
-onto them. The tool never sees anything outside its slices.
+onto them (the state slice may depend on the context, e.g. the email in
+focus). The tool never sees anything outside its slices.
 """
 from collections.abc import Callable, Sequence
 from typing import Protocol
@@ -33,7 +34,7 @@ class ToolEntry(Protocol):
     def contexts(self) -> frozenset[Trigger]: ...
 
     @property
-    def planned_only(self) -> bool: ...
+    def offered(self) -> frozenset[Trigger]: ...
 
     def runtime(self, ctx: AgentContext, state: AgentState, call_id: str) -> object: ...
 
@@ -44,15 +45,15 @@ class AgentTool[C: BaseModel, S: BaseModel]:
         tool: BaseTool,
         *,
         context_of: Callable[[AgentContext], C],
-        state_of: Callable[[AgentState], S],
+        state_of: Callable[[AgentContext, AgentState], S],
         contexts: frozenset[Trigger],
-        planned_only: bool = False,
+        offered: frozenset[Trigger] | None = None,
     ) -> None:
         self._tool = tool
         self._context_of = context_of
         self._state_of = state_of
         self._contexts = contexts
-        self._planned_only = planned_only
+        self._offered = contexts if offered is None else offered & contexts
 
     @property
     def name(self) -> str:
@@ -64,16 +65,17 @@ class AgentTool[C: BaseModel, S: BaseModel]:
 
     @property
     def contexts(self) -> frozenset[Trigger]:
+        """Triggers where the tool may run (planned by a flow or chosen by the model)."""
         return self._contexts
 
     @property
-    def planned_only(self) -> bool:
-        """Invoked by the flow itself, never offered to the model."""
-        return self._planned_only
+    def offered(self) -> frozenset[Trigger]:
+        """Triggers where the model may choose it; elsewhere only flows call it."""
+        return self._offered
 
     def runtime(self, ctx: AgentContext, state: AgentState, call_id: str) -> ToolRuntime[C, S]:
         return ToolRuntime(
-            state=self._state_of(state),
+            state=self._state_of(ctx, state),
             context=self._context_of(ctx),
             config={},
             stream_writer=_no_stream,
@@ -95,5 +97,5 @@ class Registry:
         return [
             t.tool
             for t in self._tools.values()
-            if trigger in t.contexts and not t.planned_only
+            if trigger in t.offered
         ]

@@ -13,7 +13,7 @@ from typing import Protocol
 from pydantic import TypeAdapter
 
 from src.classification.prompt import build_system_prompt
-from src.classification.taxonomy import Classification
+from src.classification.taxonomy import Classification, Taxonomy
 from src.db.rows import EmailRow
 from src.db.store import Store
 from src.llm.errors import LLMFatalError
@@ -50,20 +50,34 @@ class BatchResult(Schema):
     items: list[Item]
 
 
-class _EmailIn(Schema):
+class EmailIn(Schema):
+    """What the model sees of one email (data, never instructions)."""
+
     id: str
     sender: str | None
     subject: str | None
     date: str | None
     snippet: str | None
+    body: str | None = None
+
+    @classmethod
+    def of(cls, row: EmailRow, body: str | None = None) -> "EmailIn":
+        return cls(
+            id=row.id,
+            sender=row.sender,
+            subject=row.subject,
+            date=row.date,
+            snippet=row.snippet,
+            body=body,
+        )
 
 
-_EMAILS_IN = TypeAdapter(list[_EmailIn])
+_EMAILS_IN = TypeAdapter(list[EmailIn])
 
 
 __all__ = [
-    "Abort", "BatchResult", "Classification", "Classifier", "EmailClassifier", "Item",
-    "classify_pending",
+    "Abort", "BatchResult", "Classification", "Classifier", "EmailClassifier", "EmailIn", "Item",
+    "build_classify_prompt", "classify_pending", "to_classifications",
 ]
 
 
@@ -84,6 +98,44 @@ def _parse_deadline(value: str | None) -> date | None:
         return None
 
 
+def build_classify_prompt(
+    taxonomy: Taxonomy,
+    preferences: Sequence[str],
+    emails: Sequence[EmailIn],
+    context: CallContext,
+) -> Prompt:
+    payload = _EMAILS_IN.dump_json(list(emails), exclude_none=True).decode()
+    return Prompt(
+        purpose="classify",
+        messages=(
+            ChatMessage(role="system", content=build_system_prompt(taxonomy, preferences)),
+            ChatMessage(role="human", content=payload),
+        ),
+        context=context,
+    )
+
+
+def to_classifications(
+    items: Sequence[Item], wanted: set[str], taxonomy: Taxonomy
+) -> dict[str, Classification]:
+    """Keep only items for requested ids with a category of the active taxonomy."""
+    valid = set(taxonomy.names)
+    out: dict[str, Classification] = {}
+    for i in items:
+        if i.id not in wanted or i.category not in valid:
+            continue
+        out[i.id] = Classification(
+            category=i.category,
+            reason=i.reason.strip()[:REASON_MAX],
+            is_relevant=i.is_relevant,
+            deadline=_parse_deadline(i.deadline),
+            has_document=i.has_document,
+            ephemeral=i.ephemeral,
+            category_set_id=taxonomy.set_id,
+        )
+    return out
+
+
 class Classifier:
     def __init__(self, store: Store, gateway: StructuredGenerator) -> None:
         self.store = store
@@ -94,41 +146,17 @@ class Classifier:
         if taxonomy is None:
             raise Abort("nenhuma taxonomia ativa; rode as migrações (alembic upgrade head)")
         preferences = self.store.active_preferences(PREFERENCE_SCOPE)
-        payload = _EMAILS_IN.dump_json(
-            [
-                _EmailIn(id=r.id, sender=r.sender, subject=r.subject, date=r.date, snippet=r.snippet)
-                for r in rows
-            ]
-        ).decode()
-        prompt = Prompt(
-            purpose="classify",
-            messages=(
-                ChatMessage(role="system", content=build_system_prompt(taxonomy, preferences)),
-                ChatMessage(role="human", content=payload),
-            ),
-            context=CallContext(email_ids=tuple(r.id for r in rows)),
+        prompt = build_classify_prompt(
+            taxonomy,
+            preferences,
+            [EmailIn.of(r) for r in rows],
+            CallContext(email_ids=tuple(r.id for r in rows)),
         )
         try:
             result = self.gateway.generate_structured(prompt, BatchResult)
         except LLMFatalError as exc:
             raise Abort(str(exc)) from exc
-
-        wanted = {r.id for r in rows}
-        valid = set(taxonomy.names)
-        out: dict[str, Classification] = {}
-        for i in result.parsed.items:
-            if i.id not in wanted or i.category not in valid:
-                continue
-            out[i.id] = Classification(
-                category=i.category,
-                reason=i.reason.strip()[:REASON_MAX],
-                is_relevant=i.is_relevant,
-                deadline=_parse_deadline(i.deadline),
-                has_document=i.has_document,
-                ephemeral=i.ephemeral,
-                category_set_id=taxonomy.set_id,
-            )
-        return out
+        return to_classifications(result.parsed.items, {r.id for r in rows}, taxonomy)
 
 
 def classify_pending(store: Store, classifier: EmailClassifier, run_id: int) -> None:

@@ -61,3 +61,6 @@ class _Users(_Group):
 
     def messages(self) -> _Group:
         return _Group(self.svc, "messages")
+
+    def labels(self) -> _Group:
+        return _Group(self.svc, "labels")
