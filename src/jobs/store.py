@@ -66,9 +66,12 @@ class JobStore:
             "created_at": now,
         }
         with self.sf.begin() as s:
-            insert = postgresql.insert if s.get_bind().dialect.name == "postgresql" else sqlite.insert
-            result = s.execute(insert(Job).values(row).on_conflict_do_nothing())
-            return isinstance(result, CursorResult) and result.rowcount > 0
+            pg = s.get_bind().dialect.name == "postgresql"
+            insert = postgresql.insert if pg else sqlite.insert
+            # rowcount is unreliable for ON CONFLICT DO NOTHING under psycopg;
+            # RETURNING yields a row only when the insert happened.
+            stmt = insert(Job).values(row).on_conflict_do_nothing().returning(Job.id)
+            return s.execute(stmt).scalar_one_or_none() is not None
 
     def claim(self, worker_id: str) -> ClaimedJob | None:
         now = self._now()
