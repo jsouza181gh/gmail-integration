@@ -34,15 +34,19 @@ class IndexOutcome(Schema):
     embedded: int = 0
 
 
-def effective_mime(ref: AttachmentRef) -> str:
+def mime_for(mime_type: str, filename: str) -> str:
     """Mime type, trusting the extension when the sender said octet-stream."""
-    name = ref.filename.lower()
-    if ref.mime_type in ("application/octet-stream", "binary/octet-stream", ""):
+    name = filename.lower()
+    if mime_type in ("application/octet-stream", "binary/octet-stream", ""):
         if name.endswith(".pdf"):
             return PDF
         if name.endswith(".xml"):
             return "application/xml"
-    return ref.mime_type
+    return mime_type
+
+
+def effective_mime(ref: AttachmentRef) -> str:
+    return mime_for(ref.mime_type, ref.filename)
 
 
 def candidate(ref: AttachmentRef) -> str | None:

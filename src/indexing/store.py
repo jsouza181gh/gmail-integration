@@ -4,7 +4,7 @@ Every method is its own transaction and idempotent, so a job interrupted at
 any point can simply run again.
 """
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -23,6 +23,26 @@ class EmailText(Schema):
     subject: str | None
     date: str | None
     body: str
+
+
+class AnalysisRecord(Schema):
+    doc_class: str
+    doc_type: str
+    title: str
+    summary: str
+    issuer: str | None
+    amount_cents: int | None
+    issued_on: date | None
+    due_on: date | None
+    barcode: str | None
+    text: str | None
+    embedding: tuple[float, ...]
+    embedding_model: str
+
+
+class EmailHeader(Schema):
+    sender: str | None
+    subject: str | None
 
 
 class NewAttachment(Schema):
@@ -141,3 +161,27 @@ class IndexStore:
         with self.sf() as s:
             row = s.get(Attachment, attachment_id)
             return None if row is None else AttachmentRow.model_validate(row)
+
+    def email_header(self, email_id: str) -> EmailHeader:
+        with self.sf() as s:
+            e = s.get(Email, email_id)
+            return EmailHeader(sender=e.sender if e else None, subject=e.subject if e else None)
+
+    def skip_attachment(self, attachment_id: int, reason: str) -> None:
+        with self.sf.begin() as s:
+            a = s.get_one(Attachment, attachment_id)
+            a.status, a.skip_reason, a.doc_class = "skipped", reason, "outro"
+            a.analyzed_at = _now()
+
+    def fail_attachment(self, attachment_id: int, error: str) -> None:
+        with self.sf.begin() as s:
+            a = s.get_one(Attachment, attachment_id)
+            a.status, a.error, a.analyzed_at = "failed", error[:2000], _now()
+
+    def save_analysis(self, attachment_id: int, rec: AnalysisRecord) -> None:
+        with self.sf.begin() as s:
+            a = s.get_one(Attachment, attachment_id)
+            for field, value in rec.model_dump().items():
+                setattr(a, field, value)
+            a.embedding = rec.embedding
+            a.status, a.error, a.analyzed_at = "done", None, _now()
