@@ -1,13 +1,21 @@
 from collections.abc import Sequence
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, ValidationError
 
 from src.llm.config import LLMConfig, load_llm_config
 from src.llm.errors import LLMExhaustedError, LLMFatalError
 from src.llm.gateway import LLMGateway
-from src.llm.types import CallContext, CallRecord, ChatMessage, Prompt, TokenUsage
+from src.llm.types import (
+    CallContext,
+    CallRecord,
+    ChatMessage,
+    Prompt,
+    TokenUsage,
+    ToolCallRequest,
+)
 
 
 class Out(BaseModel):
@@ -33,9 +41,31 @@ class FakeRunnable:
         return {"raw": raw, "parsed": step, "parsing_error": None}
 
 
+Turn = AIMessage | Exception | str  # str: not an AIMessage (bad output)
+
+
+class FakeToolRunnable:
+    def __init__(self, script: list[Turn]):
+        self.script = script
+        self.seen: list[list[BaseMessage]] = []
+
+    def invoke(self, messages: list[BaseMessage], /) -> object:
+        self.seen.append(messages)
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
 class FakeChat:
-    def __init__(self, script: list[Step]):
+    def __init__(self, script: list[Step], turns: list[Turn] | None = None):
         self.runnable = FakeRunnable(script)
+        self.tool_runnable = FakeToolRunnable(turns or [])
+        self.bound: list[str] = []
+
+    def bind_tools(self, tools: Sequence[BaseTool]) -> FakeToolRunnable:
+        self.bound = [t.name for t in tools]
+        return self.tool_runnable
 
     def with_structured_output(
         self, schema: type[BaseModel], *, include_raw: bool
@@ -191,3 +221,102 @@ def test_load_config_rejects_unknown_mode(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("LLM_MODE", "turbo")
     with pytest.raises(ValidationError):
         load_llm_config()
+
+
+USAGE = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+
+
+@tool
+def get_email_body(email_id: str) -> str:
+    """Body of one email.
+
+    Args:
+        email_id: id
+    """
+    return email_id
+
+
+def ai_turn(content: str = "", calls: int = 0) -> AIMessage:
+    return AIMessage(
+        content=content,
+        tool_calls=[
+            {"id": f"c{i + 1}", "name": "get_email_body", "args": {"email_id": "a"}}
+            for i in range(calls)
+        ],
+        usage_metadata=USAGE,
+    )
+
+
+def test_generate_turn_returns_tool_calls() -> None:
+    chat = FakeChat([], [ai_turn(calls=1)])
+    turn = gw(chats={"m1": chat}).generate_turn(P, [get_email_body])
+    assert chat.bound == ["get_email_body"]
+    assert turn.tool_calls == (
+        ToolCallRequest(id="c1", name="get_email_body", args={"email_id": "a"}),
+    )
+    assert turn.content == "" and turn.model == "m1"
+    assert turn.usage.total_tokens == 15
+
+
+def test_generate_turn_retries_transient_and_records_both() -> None:
+    rec = ListRecorder()
+    chat = FakeChat([], [RuntimeError("503 UNAVAILABLE"), ai_turn("pronto")])
+    turn = gw(chats={"m1": chat}, recorder=rec).generate_turn(P, [get_email_body])
+    assert turn.content == "pronto" and turn.tool_calls == ()
+    assert [r.status for r in rec.items] == ["error", "ok"]
+    assert rec.items[1].response_text == "pronto"
+
+
+def test_generate_turn_records_tool_calls_as_text() -> None:
+    rec = ListRecorder()
+    gw(chats={"m1": FakeChat([], [ai_turn(calls=1)])}, recorder=rec).generate_turn(
+        P, [get_email_body]
+    )
+    assert rec.items[0].response_text == 'get_email_body({"email_id":"a"})'
+
+
+def test_tool_messages_round_trip_to_langchain() -> None:
+    call = ToolCallRequest(id="c1", name="get_email_body", args={"email_id": "a"})
+    prompt = Prompt(
+        purpose="decide",
+        messages=(
+            ChatMessage(role="human", content="oi"),
+            ChatMessage(role="ai", content="", tool_calls=(call,)),
+            ChatMessage(role="tool", content="corpo", tool_call_id="c1"),
+        ),
+    )
+    chat = FakeChat([], [ai_turn("ok")])
+    gw(chats={"m1": chat}).generate_turn(prompt, [get_email_body])
+    _, ai, tool_msg = chat.tool_runnable.seen[0]
+    assert isinstance(ai, AIMessage) and ai.tool_calls[0]["id"] == "c1"
+    assert ai.tool_calls[0]["args"] == {"email_id": "a"}
+    assert isinstance(tool_msg, ToolMessage) and tool_msg.tool_call_id == "c1"
+    assert tool_msg.content == "corpo"
+
+
+def test_generate_turn_retries_non_ai_output_without_sleep() -> None:
+    rec, sleeps = ListRecorder(), list[float]()
+    chat = FakeChat([], ["garbage", ai_turn("ok")])
+    turn = gw(chats={"m1": chat}, recorder=rec, sleeps=sleeps).generate_turn(P, [get_email_body])
+    assert turn.content == "ok" and sleeps == []
+    assert rec.items[0].error_kind == "bad_output"
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"role": "human", "tool_calls": (ToolCallRequest(id="c", name="n", args={}),)},
+        {"role": "ai", "tool_call_id": "c"},
+        {"role": "tool"},
+    ],
+)
+def test_chat_message_rejects_invalid_tool_fields(kw: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        ChatMessage.model_validate({"content": "x", **kw})
+
+
+def test_agent_ids_travel_in_call_context() -> None:
+    rec = ListRecorder()
+    p = P.model_copy(update={"context": CallContext(agent_run_id=1, agent_step_id=2)})
+    gw(chats={"m1": FakeChat([], [ai_turn("ok")])}, recorder=rec).generate_turn(p, [get_email_body])
+    assert (rec.items[0].context.agent_run_id, rec.items[0].context.agent_step_id) == (1, 2)

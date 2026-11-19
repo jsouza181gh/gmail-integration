@@ -168,6 +168,8 @@ class LlmCall(Base):
     audio_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     response_text: Mapped[str | None] = mapped_column(Text)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"))
+    agent_run_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    agent_step_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
 
 class LlmCallMessage(Base):
