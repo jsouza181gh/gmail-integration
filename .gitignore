@@ -8,3 +8,5 @@ emails.db*
 emails.json
 scripts/export-emails.ps1
 exports/
+backups/
+.deploy/

@@ -9,3 +9,12 @@ __pycache__
 docs
 tests
 .git
+# real email data and local tooling: never inside the (public) image
+exports
+scripts
+backups
+.deploy
+.superpowers
+.claude
+.github
+*.csv
