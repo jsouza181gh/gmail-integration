@@ -204,13 +204,23 @@ class DocumentIndexer:
             return
         mime = mime_for(mime_type, filename)
         ex = extract(mime, filename, data)
+        if ex.encrypted:  # needs a password we do not have; nobody can read it
+            self.store.skip_attachment(att_id, "encrypted")
+            return
         header = self.store.email_header(email_id)
         context = CallContext(email_ids=(email_id,))
-        result = self.llm.generate_structured(
-            build_analyze_prompt(filename, mime, header.sender, header.subject, ex, context),
-            Analysis,
-            check_analysis,
-        )
+        try:
+            result = self.llm.generate_structured(
+                build_analyze_prompt(filename, mime, header.sender, header.subject, ex, context),
+                Analysis,
+                check_analysis,
+            )
+        except LLMFatalError as exc:
+            if ex.part is None:
+                raise  # not about the file (key, request): let the job retry
+            # the model refused this file (400): retrying will not change it
+            self.store.fail_attachment(att_id, f"modelo recusou o arquivo: {exc}")
+            return
         a = result.parsed
         text = ex.text if ex.mode == "text" else (a.transcription or "")[:TRANSCRIPTION_MAX]
         about = "\n".join(x for x in (a.title, a.summary, a.issuer or "", text) if x)[:EMBED_TEXT_MAX]

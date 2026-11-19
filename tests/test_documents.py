@@ -82,8 +82,13 @@ def test_extract_text_pdf() -> None:
     assert ex.mode == "text" and "energia eletrica" in ex.text and ex.part is None
 
 
-@pytest.mark.parametrize("data", [blank_pdf(), blank_pdf("segredo"), b"not a pdf at all"])
-def test_extract_scanned_encrypted_or_broken_pdf_goes_binary(data: bytes) -> None:
+def test_extract_password_pdf_is_flagged() -> None:
+    ex = extract("application/pdf", "fatura.pdf", blank_pdf("12345"))
+    assert ex.encrypted and ex.part is None
+
+
+@pytest.mark.parametrize("data", [blank_pdf(), b"not a pdf at all"])
+def test_extract_scanned_or_broken_pdf_goes_binary(data: bytes) -> None:
     ex = extract("application/pdf", "scan.pdf", data)
     assert ex.mode == "binary" and ex.part is not None
     assert ex.part.mime_type == "application/pdf" and ex.part.data == data
@@ -267,3 +272,26 @@ def test_done_attachment_is_not_redone(session_factory: sessionmaker[Session]) -
     assert len(llm.prompts) == 1
     with session_factory() as s:
         assert len(s.scalars(select(Attachment)).all()) == 1
+
+
+def test_password_pdf_skipped_without_llm(session_factory: sessionmaker[Session]) -> None:
+    svc, att_id = setup(session_factory, blank_pdf("12345"), name="Fatura_MASTERCARD.pdf")
+    llm = FakeLLM([])
+    DocumentIndexer(IndexStore(session_factory), llm, lambda: svc, max_attempts=5).handle(job(att_id))
+    r = row(session_factory, att_id)
+    assert (r.status, r.skip_reason) == ("skipped", "encrypted") and llm.prompts == []
+
+
+def test_file_refused_by_model_fails_at_once(session_factory: sessionmaker[Session]) -> None:
+    svc, att_id = setup(session_factory, bytes([0xFF, 0xD8, 0xFF]) + b"x" * 40_000, mime="image/jpeg", name="a.jpg")
+    llm = FakeLLM([LLMFatalError("400 INVALID_ARGUMENT")])
+    DocumentIndexer(IndexStore(session_factory), llm, lambda: svc, max_attempts=5).handle(job(att_id, attempts=1))
+    r = row(session_factory, att_id)
+    assert r.status == "failed" and "INVALID_ARGUMENT" in (r.error or "")
+
+
+def test_fatal_on_text_still_raises(session_factory: sessionmaker[Session]) -> None:
+    svc, att_id = setup(session_factory, text_pdf(LONG))
+    llm = FakeLLM([LLMFatalError("401 key")])
+    with pytest.raises(LLMFatalError):
+        DocumentIndexer(IndexStore(session_factory), llm, lambda: svc, max_attempts=5).handle(job(att_id))

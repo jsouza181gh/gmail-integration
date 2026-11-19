@@ -22,13 +22,18 @@ class Extracted(Schema):
     mode: ExtractMode
     text: str
     part: BinaryPart | None
+    encrypted: bool = False  # password-protected PDF (bank statements): unreadable
+
+
+class _Encrypted(Exception):
+    pass
 
 
 def _pdf_text(data: bytes) -> str | None:
     try:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted and not reader.decrypt(""):
-            return None
+            raise _Encrypted
         pages = reader.pages[:PDF_MAX_PAGES]
         return "\n".join(p.extract_text() or "" for p in pages)
     except (PyPdfError, ValueError, KeyError, TypeError, OSError):
@@ -42,7 +47,10 @@ def _squeeze(text: str) -> str:
 
 def extract(mime_type: str, filename: str, data: bytes) -> Extracted:
     if mime_type == "application/pdf":
-        text = _pdf_text(data)
+        try:
+            text = _pdf_text(data)
+        except _Encrypted:
+            return Extracted(mode="binary", text="", part=None, encrypted=True)
         if text is not None and len("".join(text.split())) >= MIN_TEXT_CHARS:
             return Extracted(mode="text", text=_squeeze(text), part=None)
         return Extracted(mode="binary", text="", part=BinaryPart(mime_type=mime_type, data=data))
