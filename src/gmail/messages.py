@@ -55,6 +55,20 @@ def _parse_date(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def summary_from(message_id: str, snippet: str | None, headers: dict[str, str]) -> MessageSummary:
+    """Summary of a message from its headers (any `messages.get` format)."""
+    clean = _INVISIBLE_RE.sub("", snippet or "")
+    return MessageSummary(
+        id=message_id,
+        sender=(headers.get("From") or "")[:60],
+        subject=(headers.get("Subject") or "")[:100],
+        date=(headers.get("Date") or "")[:25],
+        snippet=" ".join(clean.split())[:SNIPPET_MAX_CHARS],
+        received_at=_parse_date(headers.get("Date")),
+        system=SYSTEM_HEADER in headers,
+    )
+
+
 def message_summary(service: Resource, message_id: str) -> MessageSummary:
     raw = service.users().messages().get(
         userId=USER_ID,
@@ -64,13 +78,4 @@ def message_summary(service: Resource, message_id: str) -> MessageSummary:
     ).execute(num_retries=5)
     message = _GmailMessage.model_validate(raw)
     headers = {h.name: h.value for h in message.payload.headers}
-    snippet = _INVISIBLE_RE.sub("", message.snippet or "")
-    return MessageSummary(
-        id=message.id,
-        sender=(headers.get("From") or "")[:60],
-        subject=(headers.get("Subject") or "")[:100],
-        date=(headers.get("Date") or "")[:25],
-        snippet=" ".join(snippet.split())[:SNIPPET_MAX_CHARS],
-        received_at=_parse_date(headers.get("Date")),
-        system=SYSTEM_HEADER in headers,
-    )
+    return summary_from(message.id, message.snippet, headers)

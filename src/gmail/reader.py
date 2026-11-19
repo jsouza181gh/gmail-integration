@@ -26,6 +26,8 @@ _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "table", "s
 
 class _Body(BaseModel):
     data: str | None = None
+    attachmentId: str | None = None
+    size: int = 0
 
 
 class _Header(BaseModel):
@@ -34,6 +36,7 @@ class _Header(BaseModel):
 
 
 class _Part(BaseModel):
+    partId: str = ""
     mimeType: str = ""
     filename: str | None = None
     body: _Body = _Body()
@@ -126,14 +129,14 @@ def _find(part: _Part, mime: str) -> str | None:
     return None
 
 
-def extract_body(payload: _Part) -> str:
+def extract_body(payload: _Part, max_chars: int = BODY_MAX_CHARS) -> str:
     plain = _find(payload, "text/plain")
     if plain is not None and plain.strip():
         text = plain
     else:
         html = _find(payload, "text/html")
         text = html_to_text(html) if html else ""
-    return _clean(text)[:BODY_MAX_CHARS]
+    return _clean(text)[:max_chars]
 
 
 class GmailReader:

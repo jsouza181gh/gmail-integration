@@ -62,7 +62,8 @@ def jobs(session_factory):
 def queued(jobs):
     out = []
     while (job := jobs.claim("t")) is not None:
-        out.append(job.payload.email_id)
+        if job.payload.kind == "process_email":
+            out.append(job.payload.email_id)
     return out
 
 
@@ -176,3 +177,15 @@ def test_sync_ignores_system_alert_messages(store, jobs):
     assert result == SyncResult(ingested=1, enqueued=1)
     assert queued(jobs) == ["m1"]
     assert {r.id for r in store.report_rows(run_of(store))} == {"m1"}
+
+
+def test_sync_enqueues_index_job(store, jobs):
+    svc = make_service(lambda **kw: history_response(["m1"], "20"))
+    sync_inbox(store, svc, jobs)
+    with jobs.sf() as s:
+        from sqlalchemy import select
+
+        from src.db.models import Job
+
+        rows = sorted((j.kind, j.email_id) for j in s.scalars(select(Job)))
+    assert rows == [("index_email", "m1"), ("process_email", "m1")]
