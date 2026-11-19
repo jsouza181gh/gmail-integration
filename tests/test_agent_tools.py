@@ -231,6 +231,7 @@ EXPECTED_SLICES = {
     "sender_history": ({"history"}, {"email_id", "sender"}),
     "list_emails": ({"mail"}, set()),
     "list_labels": ({"mail"}, set()),
+    "propose_action": ({"actions", "email_id", "run"}, {"proposals"}),
 }
 
 
@@ -244,7 +245,7 @@ def test_tool_slices_are_minimal() -> None:
 
 def test_registry_offers_per_trigger() -> None:
     reg = build_registry()
-    assert {t.name for t in reg.for_model("webhook")} == {"get_email_body"}
+    assert {t.name for t in reg.for_model("webhook")} == {"get_email_body", "propose_action"}
     assert {t.name for t in reg.for_model("chat")} == set(EXPECTED_SLICES)
 
 

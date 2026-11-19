@@ -14,6 +14,7 @@ TABLES = {
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
     "jobs", "agent_configs", "agent_runs", "agent_steps",
+    "tool_policies", "automation_rules", "suggested_actions",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
@@ -65,3 +66,11 @@ def test_models_match_migrations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     with create_engine(url).connect() as conn:
         diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
     assert diff == []
+
+
+def test_seed_tool_policies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, url = _upgraded(tmp_path, monkeypatch)
+    with create_engine(url).connect() as c:
+        rows = set(c.execute(text("select target, trigger, policy from tool_policies")).all())
+    assert ("apply_labels", "webhook", "auto") in rows and len(rows) == 12
+    assert {p for t, _, p in rows if t != "apply_labels"} == {"suggest"}

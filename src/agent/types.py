@@ -1,6 +1,6 @@
 """Vocabulary shared by the agent runtime, its ports and its tools."""
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from src.llm.types import Schema
 
@@ -13,6 +13,15 @@ ProposalOutcome = Literal["suggested", "auto", "denied", "duplicate"]
 
 # Hard invariant above any database policy or rule: filters never run alone.
 NEVER_AUTO: frozenset[ActionKind] = frozenset({"block_sender"})
+ACTION_KINDS: tuple[ActionKind, ...] = get_args(ActionKind)
+
+
+def as_action_kind(value: str) -> ActionKind | None:
+    """Typed view of a stored action name; None for anything unknown."""
+    for kind in ACTION_KINDS:
+        if kind == value:
+            return kind
+    return None
 
 
 class CategoryCount(Schema):

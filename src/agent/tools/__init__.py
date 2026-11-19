@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from src.agent.context import AgentContext
 from src.agent.registry import AgentTool, Registry, ToolEntry
 from src.agent.state import AgentState, EmailFacts
+from src.agent.tools.act import ActCtx, ActState, propose_action
 from src.agent.tools.classify import ClassifyCtx, ClassifyState, classify_email
 from src.agent.tools.mail import (
     BodyCtx,
@@ -30,6 +31,7 @@ SLICES: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "sender_history": (SenderCtx, SenderState),
     "list_emails": (MailCtx, NoState),
     "list_labels": (MailCtx, NoState),
+    "propose_action": (ActCtx, ActState),
 }
 
 
@@ -71,6 +73,12 @@ def build_registry() -> Registry:
             ),
             contexts=BOTH,
             offered=CHAT,
+        ),
+        AgentTool(
+            propose_action,
+            context_of=lambda c: ActCtx(actions=c.actions, email_id=focus_id(c), run=c.run),
+            state_of=lambda c, s: ActState(proposals=s.proposals),
+            contexts=BOTH,
         ),
         AgentTool(
             list_emails,

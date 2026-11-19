@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -233,6 +234,84 @@ class AgentStep(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+# --- agent: policies, suggested actions, automation rules ---------------------
+
+class ToolPolicy(Base):
+    """auto | suggest | deny per target (action kind or apply_labels) and trigger.
+
+    Code invariants (`NEVER_AUTO`) sit above these rows.
+    """
+
+    __tablename__ = "tool_policies"
+    __table_args__ = (UniqueConstraint("target", "trigger"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target: Mapped[str] = mapped_column(String(32), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy: Mapped[str] = mapped_column(String(16), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AutomationRule(Base):
+    """Deterministic condition (AND of the non-null fields) -> action."""
+
+    __tablename__ = "automation_rules"
+    __table_args__ = (
+        CheckConstraint(
+            "sender_address IS NOT NULL OR sender_domain IS NOT NULL"
+            " OR category IS NOT NULL OR subject_contains IS NOT NULL",
+            name="ck_automation_rules_has_condition",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    sender_address: Mapped[str | None] = mapped_column(String(320))
+    sender_domain: Mapped[str | None] = mapped_column(String(255))
+    category: Mapped[str | None] = mapped_column(String(64))
+    subject_contains: Mapped[str | None] = mapped_column(String(200))
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    fired_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SuggestedAction(Base):
+    __tablename__ = "suggested_actions"
+    __table_args__ = (
+        # one live proposal per (email, kind); rejected/executed ones may repeat
+        Index(
+            "uq_suggested_actions_live",
+            "email_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'approved')"),
+            sqlite_where=text("status IN ('pending', 'approved')"),
+        ),
+        Index("ix_suggested_actions_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id"))
+    rule_id: Mapped[int | None] = mapped_column(ForeignKey("automation_rules.id"))
+    batch_id: Mapped[str | None] = mapped_column(String(64))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Job(Base):
     """Work queue; payload lives in typed nullable columns per kind."""
 
@@ -258,7 +337,7 @@ class Job(Base):
     run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
-    action_id: Mapped[int | None] = mapped_column(Integer)
+    action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
     last_error: Mapped[str | None] = mapped_column(Text)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_by: Mapped[str | None] = mapped_column(String(64))

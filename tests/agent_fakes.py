@@ -108,7 +108,7 @@ class NoActions:
         kind: ActionKind,
         reason: str,
         *,
-        run_id: int,
+        run_id: int | None,
         trigger: Trigger,
         rule: RuleRef | None = None,
     ) -> ProposalRef:
