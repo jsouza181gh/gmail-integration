@@ -104,6 +104,7 @@ class Store:
                     "subject": e.subject,
                     "date": e.date,
                     "snippet": e.snippet,
+                    "received_at": e.received_at,
                 }
                 for e in new_emails
             ],

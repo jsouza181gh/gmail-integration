@@ -68,6 +68,26 @@ Sem `WEBHOOK_TOKEN` qualquer um pode chamar o webhook (o estrago é limitado a d
 1. Defina `WEBHOOK_TOKEN=<valor longo aleatório>` no `.env` da VPS e `docker compose up -d`.
 2. Troque o endpoint da assinatura para `https://<SEU_DOMINIO>/webhooks/gmail?token=<valor>`.
 
+## Classificação
+
+- **Taxonomia no banco, versionada:** `category_sets` → `categories` (+ `category_examples`) e `category_flags`. A v1 (11 categorias + flags `is_relevant`, `deadline`, `has_document`, `ephemeral`) entra pela migração `0003`. O prompt é montado da versão ativa a cada lote, então mudar a taxonomia não exige restart.
+- **Preferências** (ex.: quais vagas interessam) ficam em `kb_entries` (`scope = classification`), nunca no prompt fixo.
+- **Gateway LLM** (`src/llm/`): toda chamada passa por ele. Modo `LLM_MODE=free|fast`, retry/backoff, fallback entre `GEMINI_MODELS`, e cada tentativa vira uma linha em `llm_calls` (+ `llm_call_messages`, `llm_call_emails`).
+- **Reclassificar** o que já está no banco com a taxonomia ativa:
+
+```bash
+docker compose run --rm api python -m src.cli.reclassify          # só e-mails de versões antigas
+docker compose run --rm api python -m src.cli.reclassify --all    # todos
+```
+
+## Tipos
+
+`mypy` estrito (sem `Any` explícito) cobre os módulos listados em `mypy.ini`:
+
+```bash
+.venv\Scripts\python -m mypy
+```
+
 ## CLI
 
 ```bash

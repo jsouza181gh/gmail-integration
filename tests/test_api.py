@@ -94,3 +94,8 @@ def test_renew_loop_retries_after_failure():
         while len(attempts) < 3 and time.time() < deadline:
             time.sleep(0.01)
     assert len(attempts) >= 3
+
+
+def test_entrypoints_import():
+    import src.api.app  # noqa: F401
+    import src.cli.classify_unread  # noqa: F401

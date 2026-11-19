@@ -35,7 +35,7 @@ def message(mid):
             "headers": [
                 {"name": "From", "value": f"{mid}@x.com"},
                 {"name": "Subject", "value": f"assunto {mid}"},
-                {"name": "Date", "value": "Mon, 16 Nov 2026"},
+                {"name": "Date", "value": "Mon, 16 Nov 2026 10:00:00 +0000"},
             ]
         },
     }
@@ -82,6 +82,7 @@ def test_ingests_and_classifies_new_message(store):
     assert {r.id for r in rows} == {"m1", "m2"}
     assert all(r.category == "Social" for r in rows)
     assert rows[0].sender.endswith("@x.com")
+    assert rows[0].received_at is not None
     assert store.get_watch_state().history_id == "20"
     name, kw = svc.calls[0]
     assert (name, kw["startHistoryId"], kw["labelId"]) == ("history.list", "10", "INBOX")

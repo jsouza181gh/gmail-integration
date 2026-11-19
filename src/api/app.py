@@ -108,15 +108,16 @@ def build_app() -> FastAPI:
     from src.db.store import Store
     from src.gmail.client import get_gmail_service
     from src.gmail.watch import ensure_watch
+    from src.llm.config import build_gateway
+    from src.llm.recorder import DbCallRecorder
     from src.services.sync import SyncCoordinator, sync_inbox
 
     store = Store()
-    classifier = None
+    # One gateway per process: free-mode pacing state lives in it. Chat models
+    # are created lazily, so a missing key only fails the first classification.
+    classifier = Classifier(store, build_gateway(DbCallRecorder(store.sf)))
 
     def run_sync():
-        nonlocal classifier
-        if classifier is None:
-            classifier = Classifier()
         # googleapiclient services are not thread-safe: one per sync run.
         sync_inbox(store, get_gmail_service(), classifier)
 

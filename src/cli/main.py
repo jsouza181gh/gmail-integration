@@ -5,10 +5,14 @@ Uso: python -m src.cli.main [--query Q] [--reset] [--max-pages N]
 import argparse
 import sys
 
-from src.cli.classify_unread import DEFAULT_QUERY, run
+from dotenv import load_dotenv
+
+load_dotenv()  # before importing modules that read env at import time
+
+from src.cli.classify_unread import DEFAULT_QUERY, run  # noqa: E402
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Classifica e-mails não lidos; retoma de onde parou."
     )
