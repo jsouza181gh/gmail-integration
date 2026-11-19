@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects import postgresql, sqlite
@@ -13,6 +14,7 @@ from src.classification.taxonomy import (
     TaxonomySpec,
 )
 from src.db.models import (
+    AgentRun,
     Base,
     Category,
     CategoryExample,
@@ -166,6 +168,22 @@ class Store:
                 .limit(limit)
             )
             return [EmailRow.model_validate(r) for r in rows]
+
+    def get_email(self, email_id: str) -> EmailRow | None:
+        with self.sf() as s:
+            row = s.get(Email, email_id)
+            return EmailRow.model_validate(row) if row else None
+
+    def emails_without_agent_run(self, since: datetime | None = None) -> list[str]:
+        """Ids with no successful agent run, newest first (by received_at)."""
+        done = select(AgentRun.email_id).where(
+            AgentRun.email_id.is_not(None), AgentRun.status.in_(("done", "truncated"))
+        )
+        q = select(Email.id).where(Email.id.not_in(done))
+        if since is not None:
+            q = q.where(Email.received_at >= since)
+        with self.sf() as s:
+            return list(s.scalars(q.order_by(Email.received_at.desc().nulls_last(), Email.id)))
 
     def save_classifications(self, results: Mapping[str, Classification]) -> None:
         with self.sf.begin() as s:

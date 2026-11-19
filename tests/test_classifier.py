@@ -18,7 +18,7 @@ from src.db.rows import EmailRow
 from src.db.store import Store
 from src.gmail.messages import MessageSummary
 from src.llm.errors import LLMFatalError
-from src.llm.types import Prompt, StructuredResult, TokenUsage
+from src.llm.types import Check, Prompt, StructuredResult, TokenUsage
 
 Script = Callable[[Prompt], BatchResult | Exception]
 
@@ -30,7 +30,7 @@ class FakeGateway:
         self.schemas: list[type[BaseModel]] = []
 
     def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
+        self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]:
         self.prompts.append(prompt)
         self.schemas.append(schema)
@@ -106,7 +106,7 @@ def test_classify_maps_items_and_flags(store_with_tax: Store) -> None:
     assert (c.category, c.is_relevant, c.deadline) == ("Estudos", True, date(2026, 11, 29))
     tax = store_with_tax.active_taxonomy()
     assert tax is not None and c.category_set_id == tax.set_id
-    assert gw.prompts[0].purpose == "classify" and gw.schemas[0] is BatchResult
+    assert gw.prompts[0].purpose == "classify" and issubclass(gw.schemas[0], BatchResult)
     assert gw.prompts[0].context.email_ids == ("a",)
 
 
@@ -128,9 +128,21 @@ def test_email_goes_to_human_message_as_data(store_with_tax: Store) -> None:
 
 
 def test_unknown_category_is_dropped(store_with_tax: Store) -> None:
-    gw = FakeGateway(always(batch(item("a", "Urgente"), item("b", "Promoções"))))
-    out = Classifier(store_with_tax, gw).classify(rows(store_with_tax, "a", "b"))
+    # The constrained schema stops this at the gateway; this is the second line.
+    from src.classification.classifier import to_classifications
+
+    tax = store_with_tax.active_taxonomy()
+    assert tax is not None
+    out = to_classifications([item("a", "Urgente"), item("b", "Promoções")], {"a", "b"}, tax)
     assert set(out) == {"b"}
+
+
+def test_constrained_schema_rejects_unknown_category(store_with_tax: Store) -> None:
+    from pydantic import ValidationError
+
+    gw = FakeGateway(always(batch(item("a", "Urgente"))))
+    with pytest.raises(ValidationError):  # the real gateway turns this into a retry
+        Classifier(store_with_tax, gw).classify(rows(store_with_tax, "a"))
 
 
 @pytest.mark.parametrize("bad", ["29/11", "amanhã", "", "2026-13-40"])
@@ -167,9 +179,45 @@ def test_classify_pending_saves_flags(store_with_tax: Store) -> None:
     assert row.category_set_id is not None and row.last_error is None
 
 
-def test_classify_pending_gives_up_after_unknown_categories(store_with_tax: Store) -> None:
+def test_classify_pending_gives_up_after_missing_items(store_with_tax: Store) -> None:
     run_id = ingest(store_with_tax, "a")
-    gw = FakeGateway(always(batch(item("a", "Urgente"))))
+    gw = FakeGateway(always(batch()))
     classify_pending(store_with_tax, Classifier(store_with_tax, gw), run_id)
     row = store_with_tax.report_rows(run_id)[0]
     assert row.category == "Não classificado" and len(gw.prompts) == 4
+
+
+def test_category_html_entities_and_case_are_normalized() -> None:
+    from src.classification.classifier import Item, to_classifications
+    from src.classification.seed import V1
+    from src.classification.taxonomy import Taxonomy
+
+    tax = Taxonomy(set_id=1, version=1, spec=V1)
+    items = [
+        Item(id="a", category="Promo&ccedil;&otilde;es", reason="r", is_relevant=False,
+             deadline=None, has_document=False, ephemeral=True),
+        Item(id="b", category="infra/dev", reason="r", is_relevant=True,
+             deadline=None, has_document=False, ephemeral=False),
+    ]
+    out = to_classifications(items, {"a", "b"}, tax)
+    assert (out["a"].category, out["b"].category) == ("Promoções", "Infra/Dev")
+
+
+def test_batch_schema_constrains_category_to_active_taxonomy() -> None:
+    from pydantic import ValidationError
+
+    from src.classification.classifier import BatchResult, batch_schema
+    from src.classification.seed import V1
+    from src.classification.taxonomy import Taxonomy
+
+    tax = Taxonomy(set_id=1, version=1, spec=V1)
+    schema = batch_schema(tax)
+    assert issubclass(schema, BatchResult)
+    js = schema.model_json_schema()
+    item_def = next(d for d in js["$defs"].values() if "category" in d.get("properties", {}))
+    assert item_def["properties"]["category"]["enum"] == tax.names
+    ok = {"id": "a", "category": "Promoções", "reason": "r", "is_relevant": False,
+          "deadline": None, "has_document": False, "ephemeral": True}
+    assert schema.model_validate({"items": [ok]}).items[0].category == "Promoções"
+    with pytest.raises(ValidationError):
+        schema.model_validate({"items": [{**ok, "category": "Urgente"}]})

@@ -4,14 +4,17 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -168,6 +171,8 @@ class LlmCall(Base):
     audio_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     response_text: Mapped[str | None] = mapped_column(Text)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"))
+    agent_run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    agent_step_id: Mapped[int | None] = mapped_column(ForeignKey("agent_steps.id"), index=True)
 
 
 class LlmCallMessage(Base):
@@ -178,6 +183,209 @@ class LlmCallMessage(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+# --- agent: config versions and run trail ------------------------------------
+
+class AgentConfig(Base):
+    """Immutable version of the agent's behaviour; one is active."""
+
+    __tablename__ = "agent_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    decide_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    max_turns: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"), index=True)
+    config_id: Mapped[int] = mapped_column(ForeignKey("agent_configs.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentStep(Base):
+    """One event of a run, in order. `detail` is audit text, never parsed back."""
+
+    __tablename__ = "agent_steps"
+    __table_args__ = (UniqueConstraint("run_id", "position"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GmailLabel(Base):
+    """Cache of the Gmail ids of the labels the agent applies, by name."""
+
+    __tablename__ = "gmail_labels"
+
+    name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    gmail_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# --- agent: policies, suggested actions, automation rules ---------------------
+
+class ToolPolicy(Base):
+    """auto | suggest | deny per target (action kind or apply_labels) and trigger.
+
+    Code invariants (`NEVER_AUTO`) sit above these rows.
+    """
+
+    __tablename__ = "tool_policies"
+    __table_args__ = (UniqueConstraint("target", "trigger"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target: Mapped[str] = mapped_column(String(32), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy: Mapped[str] = mapped_column(String(16), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AutomationRule(Base):
+    """Deterministic condition (AND of the non-null fields) -> action."""
+
+    __tablename__ = "automation_rules"
+    __table_args__ = (
+        CheckConstraint(
+            "sender_address IS NOT NULL OR sender_domain IS NOT NULL"
+            " OR category IS NOT NULL OR subject_contains IS NOT NULL",
+            name="ck_automation_rules_has_condition",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    sender_address: Mapped[str | None] = mapped_column(String(320))
+    sender_domain: Mapped[str | None] = mapped_column(String(255))
+    category: Mapped[str | None] = mapped_column(String(64))
+    subject_contains: Mapped[str | None] = mapped_column(String(200))
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    fired_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SuggestedAction(Base):
+    __tablename__ = "suggested_actions"
+    __table_args__ = (
+        # one live proposal per (email, kind); rejected/executed ones may repeat
+        Index(
+            "uq_suggested_actions_live",
+            "email_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'approved')"),
+            sqlite_where=text("status IN ('pending', 'approved')"),
+        ),
+        Index("ix_suggested_actions_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id"))
+    rule_id: Mapped[int | None] = mapped_column(ForeignKey("automation_rules.id"))
+    batch_id: Mapped[str | None] = mapped_column(String(64))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Feedback(Base):
+    """The user's verdict on a suggestion (and optional comment -> KB entry)."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"), index=True)
+    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    kb_entry_id: Mapped[int | None] = mapped_column(ForeignKey("kb_entries.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Notification(Base):
+    """Every alert attempt, including the ones suppressed by aggregation."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (Index("ix_notifications_kind_created", "kind", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Job(Base):
+    """Work queue; payload lives in typed nullable columns per kind."""
+
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "kind <> 'process_email' OR email_id IS NOT NULL",
+            name="ck_jobs_process_email_has_email",
+        ),
+        CheckConstraint(
+            "kind <> 'execute_action' OR action_id IS NOT NULL",
+            name="ck_jobs_execute_action_has_action",
+        ),
+        Index("ix_jobs_claim", "status", "priority", "run_after"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
+    action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class LlmCallEmail(Base):

@@ -5,6 +5,9 @@ from typing import Literal
 from src.llm.gateway import LLMGateway
 from src.llm.types import CallRecorder, Schema
 
+# 3.1 is the fallback: when 3.5 answers 503 the next attempt goes to 3.1.
+DEFAULT_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+
 
 class LLMConfig(Schema):
     models: tuple[str, ...]
@@ -16,7 +19,7 @@ class LLMConfig(Schema):
 def load_llm_config() -> LLMConfig:
     models = tuple(
         m.strip()
-        for m in os.getenv("GEMINI_MODELS", "gemini-3.5-flash-lite").split(",")
+        for m in os.getenv("GEMINI_MODELS", DEFAULT_MODELS).split(",")
         if m.strip()
     )
     return LLMConfig.model_validate(

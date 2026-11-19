@@ -13,6 +13,8 @@ TABLES = {
     "runs", "emails", "run_emails", "watch_state",
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
+    "jobs", "agent_configs", "agent_runs", "agent_steps",
+    "tool_policies", "automation_rules", "suggested_actions", "gmail_labels", "feedback", "notifications",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
@@ -52,7 +54,7 @@ def test_no_json_columns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     insp = inspect(create_engine(url))
     json_cols = [
         (t, c["name"])
-        for t in TABLES
+        for t in insp.get_table_names()
         for c in insp.get_columns(t)
         if "JSON" in str(c["type"]).upper()
     ]
@@ -64,3 +66,18 @@ def test_models_match_migrations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     with create_engine(url).connect() as conn:
         diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
     assert diff == []
+
+
+def test_seed_tool_policies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, url = _upgraded(tmp_path, monkeypatch)
+    with create_engine(url).connect() as c:
+        rows = set(c.execute(text("select target, trigger, policy from tool_policies")).all())
+    assert ("apply_labels", "webhook", "auto") in rows and len(rows) == 12
+    assert {p for t, _, p in rows if t != "apply_labels"} == {"suggest"}
+
+
+def test_seed_agent_config_v1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, url = _upgraded(tmp_path, monkeypatch)
+    with create_engine(url).connect() as c:
+        rows = c.execute(text("select version, active, max_turns from agent_configs")).all()
+    assert [tuple(r) for r in rows] == [(1, True, 4)]

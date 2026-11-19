@@ -31,7 +31,8 @@ PROJECT="gmail-integration"
 STATE_DIR="$APP_DIR/.deploy"
 BACKUP_DIR="$APP_DIR/backups"
 BACKUPS_KEPT=7
-SMOKE_TIMEOUT_S=120
+SMOKE_TIMEOUT_S="${SMOKE_TIMEOUT_S:-120}"
+SMOKE_INTERVAL_S="${SMOKE_INTERVAL_S:-5}"
 
 mkdir -p "$STATE_DIR" "$BACKUP_DIR"
 prev="$(cat "$STATE_DIR/current" 2>/dev/null || true)"
@@ -56,15 +57,26 @@ compose() {
         -f "$(compose_file "$tag")" "$@"
 }
 
+health() {
+    local tag="$1" service="$2" cid
+    cid="$(compose "$tag" ps -q "$service" || true)"
+    docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null || true
+}
+
+# Healthy api (+ /healthz) and, when the tag's compose defines it, a healthy
+# worker. Older tags have no worker, so rolling back to them still works.
 smoke() {
-    local tag="$1" deadline=$((SECONDS + SMOKE_TIMEOUT_S)) cid status
+    local tag="$1" deadline=$((SECONDS + SMOKE_TIMEOUT_S)) want_worker=0
+    if compose "$tag" config --services 2>/dev/null | grep -qx worker; then
+        want_worker=1
+    fi
     while ((SECONDS < deadline)); do
-        cid="$(compose "$tag" ps -q api || true)"
-        status="$(docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null || true)"
-        if [[ "$status" == "healthy" ]] && curl -fsS -o /dev/null http://127.0.0.1:8000/healthz; then
+        if [[ "$(health "$tag" api)" == "healthy" ]] \
+            && curl -fsS -o /dev/null http://127.0.0.1:8000/healthz \
+            && { ((want_worker == 0)) || [[ "$(health "$tag" worker)" == "healthy" ]]; }; then
             return 0
         fi
-        sleep 5
+        sleep "$SMOKE_INTERVAL_S"
     done
     return 1
 }

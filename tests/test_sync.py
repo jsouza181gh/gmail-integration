@@ -3,28 +3,10 @@ import time
 
 import pytest
 
-from src.classification.classifier import Abort, Classification
 from src.db.store import Store
+from src.jobs.store import JobStore
 from src.services.sync import WEBHOOK_QUERY, SyncCoordinator, SyncResult, sync_inbox
 from tests.fakes import FakeService, http_error
-
-
-class FakeClassifier:
-    def __init__(self, error=None):
-        self.error = error
-        self.calls = 0
-
-    def classify(self, rows):
-        self.calls += 1
-        if self.error:
-            raise self.error
-        return {
-            r.id: Classification(
-                category="Social", reason="teste", is_relevant=False, deadline=None,
-                has_document=False, ephemeral=False, category_set_id=1,
-            )
-            for r in rows
-        }
 
 
 def message(mid):
@@ -48,11 +30,14 @@ def history_response(ids, latest):
     return resp
 
 
-def make_service(history=None, gone=(), **extra):
+def make_service(history=None, gone=(), system=(), **extra):
     def get(userId, id, **kw):
         if id in gone:
             raise http_error(404)
-        return message(id)
+        msg = message(id)
+        if id in system:
+            msg["payload"]["headers"].append({"name": "X-Gmail-Integration", "value": "alert"})
+        return msg
 
     handlers = {
         "history.list": history or (lambda **kw: history_response([], "10")),
@@ -69,18 +54,31 @@ def store(session_factory):
     return s
 
 
+@pytest.fixture
+def jobs(session_factory):
+    return JobStore(session_factory)
+
+
+def queued(jobs):
+    out = []
+    while (job := jobs.claim("t")) is not None:
+        out.append(job.payload.email_id)
+    return out
+
+
 def run_of(store):
     return store.get_or_create_run(WEBHOOK_QUERY).id
 
 
-def test_ingests_and_classifies_new_message(store):
+def test_ingests_and_enqueues_new_messages(store, jobs):
     svc = make_service(lambda **kw: history_response(["m1", "m2"], "20"))
-    result = sync_inbox(store, svc, FakeClassifier())
+    result = sync_inbox(store, svc, jobs)
 
-    assert result == SyncResult(ingested=2, pending=0)
+    assert result == SyncResult(ingested=2, enqueued=2)
+    assert queued(jobs) == ["m1", "m2"]
     rows = store.report_rows(run_of(store))
     assert {r.id for r in rows} == {"m1", "m2"}
-    assert all(r.category == "Social" for r in rows)
+    assert all(r.category is None for r in rows)  # classification is the worker's job
     assert rows[0].sender.endswith("@x.com")
     assert rows[0].received_at is not None
     assert store.get_watch_state().history_id == "20"
@@ -89,28 +87,28 @@ def test_ingests_and_classifies_new_message(store):
     assert kw["historyTypes"] == ["messageAdded"]
 
 
-def test_duplicate_notification_no_duplicates(store):
+def test_duplicate_notification_no_duplicates(store, jobs):
     svc = make_service(lambda **kw: history_response(["m1"], "20"))
-    clf = FakeClassifier()
-    sync_inbox(store, svc, clf)
-    second = sync_inbox(store, svc, clf)
+    sync_inbox(store, svc, jobs)
+    second = sync_inbox(store, svc, jobs)
 
-    assert second == SyncResult(ingested=0, pending=0)
+    assert second == SyncResult(ingested=0, enqueued=0)
     assert len(store.report_rows(run_of(store))) == 1
-    assert clf.calls == 1
+    assert queued(jobs) == ["m1"]
 
 
-def test_deleted_message_is_skipped(store):
+def test_deleted_message_is_skipped(store, jobs):
     svc = make_service(
         lambda **kw: history_response(["m1", "m2"], "20"), gone={"m2"}
     )
-    result = sync_inbox(store, svc, FakeClassifier())
+    result = sync_inbox(store, svc, jobs)
     assert result.ingested == 1
     assert {r.id for r in store.report_rows(run_of(store))} == {"m1"}
+    assert queued(jobs) == ["m1"]
     assert store.get_watch_state().history_id == "20"
 
 
-def test_history_expired_falls_back(store):
+def test_history_expired_falls_back(store, jobs):
     def expired(**kw):
         raise http_error(404)
 
@@ -119,7 +117,7 @@ def test_history_expired_falls_back(store):
         messages__list=lambda **kw: {"messages": [{"id": "m1"}]},
         users__getProfile=lambda **kw: {"historyId": "500"},
     )
-    result = sync_inbox(store, svc, FakeClassifier())
+    result = sync_inbox(store, svc, jobs)
 
     assert result.ingested == 1
     assert store.get_watch_state().history_id == "500"
@@ -127,21 +125,9 @@ def test_history_expired_falls_back(store):
     assert listing["q"] == "in:inbox newer_than:7d"
 
 
-def test_llm_abort_keeps_pending_and_advances_cursor(store):
-    svc = make_service(lambda **kw: history_response(["m1"], "20"))
-    first = sync_inbox(store, svc, FakeClassifier(error=Abort("llm fora")))
-    assert first == SyncResult(ingested=1, pending=1)
-    assert store.get_watch_state().history_id == "20"
-
-    empty = make_service(lambda **kw: history_response([], "20"))
-    second = sync_inbox(store, empty, FakeClassifier())
-    assert second == SyncResult(ingested=0, pending=0)
-    assert store.report_rows(run_of(store))[0].category == "Social"
-
-
 def test_sync_without_watch_state_raises(session_factory):
     with pytest.raises(RuntimeError):
-        sync_inbox(Store(session_factory), make_service(), FakeClassifier())
+        sync_inbox(Store(session_factory), make_service(), JobStore(session_factory))
 
 
 def test_coordinator_coalesces_and_never_runs_in_parallel():
@@ -182,3 +168,11 @@ def test_coordinator_survives_run_fn_error():
     coord.trigger()
     coord.trigger()
     assert len(calls) == 2
+
+
+def test_sync_ignores_system_alert_messages(store, jobs):
+    svc = make_service(lambda **kw: history_response(["m1", "alert1"], "20"), system={"alert1"})
+    result = sync_inbox(store, svc, jobs)
+    assert result == SyncResult(ingested=1, enqueued=1)
+    assert queued(jobs) == ["m1"]
+    assert {r.id for r in store.report_rows(run_of(store))} == {"m1"}

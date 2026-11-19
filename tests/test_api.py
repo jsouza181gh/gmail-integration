@@ -99,3 +99,8 @@ def test_renew_loop_retries_after_failure():
 def test_entrypoints_import():
     import src.api.app  # noqa: F401
     import src.cli.classify_unread  # noqa: F401
+    import src.cli.actions  # noqa: F401
+    import src.cli.enqueue  # noqa: F401
+    import src.cli.rules  # noqa: F401
+    import src.worker  # noqa: F401
+    import src.agent.wiring  # noqa: F401

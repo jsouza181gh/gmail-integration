@@ -50,5 +50,26 @@ services:
       timeout: 5s
       retries: 3
 
+  worker:
+    <<: *app
+    command: ["python", "-m", "src.worker"]
+    restart: unless-stopped
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    volumes:
+      - ./secrets:/app/secrets
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # finishes the job in flight on SIGTERM
+    stop_grace_period: 120s
+    healthcheck:
+      # the loop touches the heartbeat between jobs; a long LLM job with
+      # retries can take minutes, hence the generous window
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/tmp/worker-heartbeat') > 900)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
 volumes:
   pgdata:

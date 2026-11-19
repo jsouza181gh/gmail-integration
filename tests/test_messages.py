@@ -27,3 +27,12 @@ def test_summary_unparseable_date_is_none(date: str | None) -> None:
 
 def test_snippet_keeps_200_chars() -> None:
     assert len(message_summary(svc_with(snippet="x" * 300), "a").snippet) == 200
+
+
+def test_summary_flags_system_alerts() -> None:
+    headers = [{"name": "From", "value": "me@x"}, {"name": "X-Gmail-Integration", "value": "alert"}]
+    svc = FakeService(messages__get=lambda **kw: {"id": "a", "payload": {"headers": headers}})
+    assert message_summary(svc, "a").system is True
+    headers_asked = svc.calls[0][1]["metadataHeaders"]
+    assert isinstance(headers_asked, list) and "X-Gmail-Integration" in headers_asked
+    assert message_summary(svc_with(), "a").system is False

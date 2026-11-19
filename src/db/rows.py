@@ -39,6 +39,68 @@ class EmailRow(Row):
     updated_at: datetime
 
 
+class AgentConfigRow(Row):
+    id: int
+    version: int
+    active: bool
+    decide_prompt: str
+    max_turns: int
+    created_at: datetime
+
+
+class AgentRunRow(Row):
+    id: int
+    trigger: str
+    email_id: str | None
+    config_id: int
+    status: str
+    summary: str | None
+    error: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class AgentStepRow(Row):
+    id: int
+    run_id: int
+    position: int
+    kind: str
+    name: str
+    source: str
+    status: str
+    detail: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class PendingActionRow(Row):
+    id: int
+    email_id: str
+    sender: str | None
+    subject: str | None
+    kind: str
+    reason: str
+    status: str
+    origin: str
+    rule_id: int | None
+    created_at: datetime
+
+
+class RuleRow(Row):
+    id: int
+    name: str
+    sender_address: str | None
+    sender_domain: str | None
+    category: str | None
+    subject_contains: str | None
+    action: str
+    mode: str
+    active: bool
+    fired_count: int
+    approved_count: int
+    rejected_count: int
+
+
 class WatchStateRow(Row):
     id: int
     email_address: str

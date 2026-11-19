@@ -7,6 +7,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import Resource, build
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+# Optional: filters (block sender). Never request https://mail.google.com/
+# (permanent delete).
+SETTINGS_SCOPE = "https://www.googleapis.com/auth/gmail.settings.basic"
 
 TOKEN_PATH = Path(
     os.getenv("GMAIL_TOKEN_PATH", "secrets/token.json")
@@ -29,6 +32,14 @@ def save_credentials(creds: Credentials) -> None:
         TOKEN_PATH.chmod(0o600)
 
 
+def has_scope(scope: str) -> bool:
+    """Whether the stored token was granted `scope` (False without a token)."""
+    if not TOKEN_PATH.exists():
+        return False
+    creds = Credentials.from_authorized_user_file(str(TOKEN_PATH))
+    return bool(creds.has_scopes([scope]))
+
+
 def get_gmail_service() -> Resource:
     if not TOKEN_PATH.exists():
         raise RuntimeError(
@@ -36,10 +47,9 @@ def get_gmail_service() -> Resource:
             "Execute authorize.py para autorizar a conta."
         )
 
-    creds = Credentials.from_authorized_user_file(
-        str(TOKEN_PATH),
-        SCOPES
-    )
+    # No scopes argument: keep whatever the token was granted (it may also
+    # carry SETTINGS_SCOPE), then require the mandatory ones.
+    creds = Credentials.from_authorized_user_file(str(TOKEN_PATH))
 
     if not creds.has_scopes(SCOPES):
         raise RuntimeError(

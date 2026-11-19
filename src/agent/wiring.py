@@ -1,0 +1,76 @@
+"""Builds the real agent: one gateway, the Gmail adapters and the DB adapters.
+
+Everything process-wide (gateway pacing state, registry) is created once;
+Gmail services are created per call because googleapiclient is not
+thread-safe and tokens refresh.
+"""
+import os
+
+from src.agent.actions import ActionService
+from src.agent.approvals import ApprovalService
+from src.agent.config import DbAgentConfigs
+from src.agent.context import AgentContext, LLMDeps, RunScope
+from src.agent.executor import ToolExecutor
+from src.agent.flows.execute_action import ExecuteActionFlow
+from src.agent.flows.process_email import ProcessEmailFlow
+from src.agent.kb import DbKb
+from src.agent.loop import AgentLoop
+from src.agent.policy import PolicyResolver
+from src.agent.rules import RuleEngine
+from src.agent.sender_history import DbSenderHistory
+from src.agent.tools import build_registry
+from src.agent.trail import Trail
+from src.db.store import Store
+from src.gmail.actions import GmailActions
+from src.gmail.client import get_gmail_service, has_scope
+from src.gmail.labels import GmailLabeler
+from src.gmail.reader import GmailReader
+from src.jobs.store import JobStore
+from src.llm.config import build_gateway
+from src.llm.recorder import DbCallRecorder
+
+
+class Agent:
+    """The wired agent pieces a worker needs."""
+
+    def __init__(self, store: Store, jobs: JobStore) -> None:
+        sf = store.sf
+        gateway = build_gateway(DbCallRecorder(sf))
+        self.trail = Trail(sf)
+        self.policy = PolicyResolver(sf)
+        self.actions = ActionService(sf, jobs, self.policy)
+        self.executor = ToolExecutor(build_registry(), self.trail)
+        kb = DbKb(sf)
+        mail = GmailReader(get_gmail_service)
+        labels = GmailLabeler(get_gmail_service, sf, dry_run=os.getenv("LABELS_DRY_RUN") == "1")
+        history = DbSenderHistory(sf)
+
+        def context_factory(run: RunScope, email_id: str) -> AgentContext:
+            return AgentContext(
+                run=run,
+                email_id=email_id,
+                llm=LLMDeps(structured=gateway, tools=gateway),
+                taxonomy=store,
+                mail=mail,
+                labels=labels,
+                history=history,
+                actions=self.actions,
+                policy=self.policy,
+                kb=kb,
+            )
+
+        self.approvals = ApprovalService(sf, jobs)
+        self.execute_action = ExecuteActionFlow(
+            self.approvals, store, GmailActions(get_gmail_service, has_scope)
+        )
+        self.process_email = ProcessEmailFlow(
+            store=store,
+            trail=self.trail,
+            executor=self.executor,
+            loop=AgentLoop(self.executor, self.trail, gateway),
+            rules=RuleEngine(sf),
+            actions=self.actions,
+            configs=DbAgentConfigs(sf),
+            kb=kb,
+            context_factory=context_factory,
+        )

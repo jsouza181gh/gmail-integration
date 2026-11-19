@@ -3,7 +3,9 @@ from pathlib import Path
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+from src.gmail.client import SCOPES, SETTINGS_SCOPE
+
+AUTH_SCOPES = [*SCOPES, SETTINGS_SCOPE]
 
 CREDENTIALS_PATH = Path("credentials.json")
 TOKEN_PATH = Path("secrets/token.json")
@@ -12,7 +14,7 @@ TOKEN_PATH = Path("secrets/token.json")
 def authorize():
     flow = InstalledAppFlow.from_client_secrets_file(
         str(CREDENTIALS_PATH),
-        SCOPES
+        AUTH_SCOPES
     )
 
     creds = flow.run_local_server(

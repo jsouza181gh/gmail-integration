@@ -9,7 +9,8 @@ from pydantic import BaseModel
 from src.llm.types import Schema
 
 USER_ID = "me"
-SUMMARY_HEADERS = ["From", "Subject", "Date"]
+SYSTEM_HEADER = "X-Gmail-Integration"  # set on alerts this system sends itself
+SUMMARY_HEADERS = ["From", "Subject", "Date", SYSTEM_HEADER]
 SNIPPET_MAX_CHARS = 200
 _INVISIBLE_RE = re.compile(r"[​-‏⁠﻿⠀\xa0]")
 
@@ -38,6 +39,7 @@ class MessageSummary(Schema):
     date: str
     snippet: str
     received_at: datetime | None = None
+    system: bool = False  # an alert sent by this system: never ingested
 
 
 def _parse_date(value: str | None) -> datetime | None:
@@ -70,4 +72,5 @@ def message_summary(service: Resource, message_id: str) -> MessageSummary:
         date=(headers.get("Date") or "")[:25],
         snippet=" ".join(snippet.split())[:SNIPPET_MAX_CHARS],
         received_at=_parse_date(headers.get("Date")),
+        system=SYSTEM_HEADER in headers,
     )

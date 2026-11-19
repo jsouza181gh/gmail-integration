@@ -1,9 +1,12 @@
 """Typed contracts of the LLM gateway."""
-from typing import Literal, Protocol
+import json
+from collections.abc import Callable, Sequence
+from typing import Literal, Protocol, Self, runtime_checkable
 
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.ai import UsageMetadata
-from pydantic import BaseModel, ConfigDict
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 
 ErrorKind = Literal["rate", "transient", "bad_output", "fatal"]
 
@@ -12,9 +15,43 @@ class Schema(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+JsonArgs = dict[str, JsonValue]
+
+
+class ToolCallRequest(Schema):
+    """One tool call the model asked for (args already parsed from JSON)."""
+
+    id: str
+    name: str
+    args: JsonArgs
+
+
 class ChatMessage(Schema):
-    role: Literal["system", "human", "ai"]
+    role: Literal["system", "human", "ai", "tool"]
     content: str
+    tool_calls: tuple[ToolCallRequest, ...] = ()  # role "ai" only
+    tool_call_id: str | None = None  # role "tool" only
+    # role "ai" only: provider reasoning signatures per tool call id (base64),
+    # echoed back so the model keeps its own reasoning across tool turns
+    signatures: dict[str, str] = {}
+
+    @model_validator(mode="after")
+    def _check_tool_fields(self) -> Self:
+        if (self.tool_calls or self.signatures) and self.role != "ai":
+            raise ValueError("tool_calls/signatures só em mensagens 'ai'")
+        if (self.tool_call_id is not None) != (self.role == "tool"):
+            raise ValueError("tool_call_id é obrigatório em 'tool' e proibido nos demais")
+        return self
+
+
+def render_turn(content: str, calls: Sequence[ToolCallRequest]) -> str:
+    """Readable record of a turn: text plus `name(args)` per tool call."""
+    parts = [content] if content else []
+    parts += [
+        f"{c.name}({json.dumps(c.args, separators=(',', ':'), ensure_ascii=False)})"
+        for c in calls
+    ]
+    return "\n".join(parts)
 
 
 class CallContext(Schema):
@@ -22,6 +59,8 @@ class CallContext(Schema):
 
     run_id: int | None = None
     email_ids: tuple[str, ...] = ()
+    agent_run_id: int | None = None
+    agent_step_id: int | None = None
 
 
 class Prompt(Schema):
@@ -60,6 +99,16 @@ class StructuredResult[T: BaseModel](Schema):
     usage: TokenUsage
 
 
+class AssistantTurn(Schema):
+    """One model turn of a tool-calling conversation."""
+
+    content: str
+    tool_calls: tuple[ToolCallRequest, ...]
+    model: str
+    usage: TokenUsage
+    signatures: dict[str, str] = {}
+
+
 class CallRecord(Schema):
     """One attempt against one model."""
 
@@ -80,10 +129,21 @@ class CallRecorder(Protocol):
     def record(self, rec: CallRecord) -> None: ...
 
 
+# Semantic validation of a parsed output: an error message makes the gateway
+# treat the answer as bad output and retry right away (next model).
+type Check[T] = Callable[[T], str | None]
+
+
+@runtime_checkable
 class StructuredGenerator(Protocol):
     def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
+        self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]: ...
+
+
+@runtime_checkable
+class ToolCaller(Protocol):
+    def generate_turn(self, prompt: Prompt, tools: Sequence[BaseTool]) -> AssistantTurn: ...
 
 
 class StructuredRunnable(Protocol):
@@ -95,7 +155,15 @@ class StructuredRunnable(Protocol):
     def invoke(self, input: list[BaseMessage], /) -> object: ...
 
 
+class ToolRunnable(Protocol):
+    """What `chat.bind_tools(...)` returns; output validated as `AIMessage`."""
+
+    def invoke(self, input: list[BaseMessage], /) -> object: ...
+
+
 class ChatModelLike(Protocol):
     def with_structured_output(
         self, schema: type[BaseModel], *, include_raw: bool
     ) -> StructuredRunnable: ...
+
+    def bind_tools(self, tools: Sequence[BaseTool]) -> ToolRunnable: ...

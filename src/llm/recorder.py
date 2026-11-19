@@ -2,7 +2,7 @@
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.models import LlmCall, LlmCallEmail, LlmCallMessage
-from src.llm.types import CallRecord
+from src.llm.types import CallRecord, render_turn
 
 
 class DbCallRecorder:
@@ -27,11 +27,18 @@ class DbCallRecorder:
                 audio_input_tokens=rec.usage.audio_input_tokens,
                 response_text=rec.response_text,
                 run_id=rec.context.run_id,
+                agent_run_id=rec.context.agent_run_id,
+                agent_step_id=rec.context.agent_step_id,
             )
             s.add(call)
             s.flush()
             s.add_all(
-                LlmCallMessage(call_id=call.id, position=i, role=m.role, content=m.content)
+                LlmCallMessage(
+                    call_id=call.id,
+                    position=i,
+                    role=m.role,
+                    content=render_turn(m.content, m.tool_calls),
+                )
                 for i, m in enumerate(rec.request)
             )
             s.add_all(
