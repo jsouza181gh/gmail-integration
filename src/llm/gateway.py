@@ -6,6 +6,7 @@ and records every attempt (JSON log line + optional recorder).
 
 One instance per process: pacing state lives in the instance.
 """
+import base64
 import random
 import re
 import time
@@ -39,6 +40,8 @@ from src.llm.types import (
 )
 from src.utils.console import log
 
+# Where langchain-google-genai keeps Gemini 3 function-call thought signatures.
+SIGNATURES_KEY = "__gemini_function_call_thought_signatures__"
 BACKOFF_BASE_S = 3
 BACKOFF_MAX_S = 120
 ERROR_TEXT_MAX = 300
@@ -115,7 +118,21 @@ def _to_langchain(msg: ChatMessage) -> BaseMessage:
     return AIMessage(
         content=msg.content,
         tool_calls=[{"id": c.id, "name": c.name, "args": c.args} for c in msg.tool_calls],
+        additional_kwargs={SIGNATURES_KEY: dict(msg.signatures)} if msg.signatures else {},
     )
+
+
+def _signatures(out: AIMessage) -> dict[str, str]:
+    raw = out.additional_kwargs.get(SIGNATURES_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    sigs: dict[str, str] = {}
+    for call_id, sig in raw.items():
+        if isinstance(sig, bytes):
+            sigs[str(call_id)] = base64.b64encode(sig).decode("ascii")
+        elif isinstance(sig, str):
+            sigs[str(call_id)] = sig
+    return sigs
 
 
 def _default_chat(model: str) -> ChatModelLike:
@@ -279,7 +296,13 @@ class LLMGateway:
                 )
             except ValidationError as exc:
                 raise _BadOutput(str(exc), usage, out.text) from exc
-            turn = AssistantTurn(content=out.text, tool_calls=calls, model="", usage=usage)
+            turn = AssistantTurn(
+                content=out.text,
+                tool_calls=calls,
+                model="",
+                usage=usage,
+                signatures=_signatures(out),
+            )
             return _Answer(turn, usage, render_turn(out.text, calls))
 
         turn, model, _ = self._attempts(prompt, call)

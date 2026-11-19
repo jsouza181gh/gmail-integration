@@ -261,3 +261,13 @@ def test_run_lifecycle(trail: Trail) -> None:
 
 def test_deadline_type_is_calendar_date() -> None:
     assert CLS.model_copy(update={"deadline": date(2026, 11, 29)}).deadline == date(2026, 11, 29)
+
+
+def test_loop_carries_thought_signatures_to_next_turn(trail: Trail) -> None:
+    run = trail.start_run("webhook", "a", 1)
+    first = turn("", _call("mark")).model_copy(update={"signatures": {"c1": "c2ln"}})
+    caller = FakeToolCaller([first, turn("fim")])
+    AgentLoop(ToolExecutor(REGISTRY, trail), trail, caller).run(
+        make_ctx(run_id=run, caller=caller), _state(), PROMPT, max_turns=3
+    )
+    assert caller.prompts[1].messages[1].signatures == {"c1": "c2ln"}

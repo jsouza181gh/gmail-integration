@@ -31,11 +31,14 @@ class ChatMessage(Schema):
     content: str
     tool_calls: tuple[ToolCallRequest, ...] = ()  # role "ai" only
     tool_call_id: str | None = None  # role "tool" only
+    # role "ai" only: provider reasoning signatures per tool call id (base64),
+    # echoed back so the model keeps its own reasoning across tool turns
+    signatures: dict[str, str] = {}
 
     @model_validator(mode="after")
     def _check_tool_fields(self) -> Self:
-        if self.tool_calls and self.role != "ai":
-            raise ValueError("tool_calls só em mensagens 'ai'")
+        if (self.tool_calls or self.signatures) and self.role != "ai":
+            raise ValueError("tool_calls/signatures só em mensagens 'ai'")
         if (self.tool_call_id is not None) != (self.role == "tool"):
             raise ValueError("tool_call_id é obrigatório em 'tool' e proibido nos demais")
         return self
@@ -103,6 +106,7 @@ class AssistantTurn(Schema):
     tool_calls: tuple[ToolCallRequest, ...]
     model: str
     usage: TokenUsage
+    signatures: dict[str, str] = {}
 
 
 class CallRecord(Schema):

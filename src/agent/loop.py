@@ -53,7 +53,14 @@ class AgentLoop:
             if not turn.tool_calls:
                 return LoopResult(state=state, summary=turn.content.strip(), status="done")
 
-            messages.append(ChatMessage(role="ai", content=turn.content, tool_calls=turn.tool_calls))
+            messages.append(
+                ChatMessage(
+                    role="ai",
+                    content=turn.content,
+                    tool_calls=turn.tool_calls,
+                    signatures=turn.signatures,
+                )
+            )
             for call in turn.tool_calls:
                 sig = _signature(call)
                 if sig in seen:

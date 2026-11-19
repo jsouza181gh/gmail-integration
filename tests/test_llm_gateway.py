@@ -320,3 +320,34 @@ def test_agent_ids_travel_in_call_context() -> None:
     p = P.model_copy(update={"context": CallContext(agent_run_id=1, agent_step_id=2)})
     gw(chats={"m1": FakeChat([], [ai_turn("ok")])}, recorder=rec).generate_turn(p, [get_email_body])
     assert (rec.items[0].context.agent_run_id, rec.items[0].context.agent_step_id) == (1, 2)
+
+
+SIG_KEY = "__gemini_function_call_thought_signatures__"
+
+
+def test_generate_turn_keeps_thought_signatures() -> None:
+    msg = ai_turn(calls=1)
+    msg.additional_kwargs[SIG_KEY] = {"c1": b"sig-bytes"}
+    turn = gw(chats={"m1": FakeChat([], [msg])}).generate_turn(P, [get_email_body])
+    assert turn.signatures == {"c1": "c2lnLWJ5dGVz"}  # base64 of b"sig-bytes"
+
+
+def test_thought_signatures_round_trip_to_langchain() -> None:
+    call = ToolCallRequest(id="c1", name="get_email_body", args={"email_id": "a"})
+    prompt = Prompt(
+        purpose="decide",
+        messages=(
+            ChatMessage(role="human", content="oi"),
+            ChatMessage(role="ai", content="", tool_calls=(call,), signatures={"c1": "c2ln"}),
+            ChatMessage(role="tool", content="corpo", tool_call_id="c1"),
+        ),
+    )
+    chat = FakeChat([], [ai_turn("ok")])
+    gw(chats={"m1": chat}).generate_turn(prompt, [get_email_body])
+    ai = chat.tool_runnable.seen[0][1]
+    assert ai.additional_kwargs[SIG_KEY] == {"c1": "c2ln"}
+
+
+def test_signatures_only_on_ai_messages() -> None:
+    with pytest.raises(ValidationError):
+        ChatMessage(role="human", content="x", signatures={"c1": "s"})
