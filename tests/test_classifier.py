@@ -221,3 +221,10 @@ def test_batch_schema_constrains_category_to_active_taxonomy() -> None:
     assert schema.model_validate({"items": [ok]}).items[0].category == "Promoções"
     with pytest.raises(ValidationError):
         schema.model_validate({"items": [{**ok, "category": "Urgente"}]})
+
+
+def test_classifier_sends_body_excerpt(store_with_tax: Store) -> None:
+    gw = FakeGateway(always(batch(item("a", "Social"))))
+    Classifier(store_with_tax, gw).classify(rows(store_with_tax, "a"), {"a": "Z" * 5000})
+    human = gw.prompts[0].messages[1].content
+    assert '"body":"' + "Z" * 1000 + '"' in human and "Z" * 1001 not in human

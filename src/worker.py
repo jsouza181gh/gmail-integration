@@ -38,8 +38,14 @@ def main() -> None:
 
     from src.agent.wiring import Agent
     from src.alerts.service import FailureStreak, build_alert_service
+    from src.indexing.wiring import Indexing
+    from src.llm.config import build_gateway
+    from src.llm.recorder import DbCallRecorder
 
-    agent = Agent(store, jobs)
+    # one gateway per process: free-tier pacing is shared by every job kind
+    gateway = build_gateway(DbCallRecorder(store.sf))
+    agent = Agent(store, jobs, gateway)
+    indexing = Indexing(store, jobs, gateway)
     alerts = build_alert_service(store)
     runs = FailureStreak(
         AGENT_FAILURE_STREAK,
@@ -50,6 +56,9 @@ def main() -> None:
     handlers: dict[JobKind, Handler] = {
         "process_email": runs.guard(agent.process_email.handle),
         "execute_action": agent.execute_action.handle,
+        "index_email": indexing.indexer.handle,
+        "index_attachment": indexing.documents.handle,
+        "backfill_page": indexing.backfill.handle,
     }
 
     def on_dead(job: ClaimedJob, error: str) -> None:

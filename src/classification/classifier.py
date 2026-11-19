@@ -8,7 +8,7 @@ database on every batch, so changes apply without a restart.
 import html
 import os
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Literal, Protocol, cast
 
@@ -34,6 +34,7 @@ MAX_CONSECUTIVE_FAILURES = 3  # failed batches in a row before aborting
 GIVE_UP_CATEGORY = "Não classificado"
 PREFERENCE_SCOPE = "classification"
 REASON_MAX = 200
+BODY_EXCERPT_MAX = 1000  # per email, when the caller has the body
 
 
 class Item(Schema):
@@ -101,7 +102,9 @@ class Abort(Exception):
 
 
 class EmailClassifier(Protocol):
-    def classify(self, rows: Sequence[EmailRow]) -> dict[str, Classification]: ...
+    def classify(
+        self, rows: Sequence[EmailRow], bodies: Mapping[str, str] | None = None
+    ) -> dict[str, Classification]: ...
 
 
 def _parse_deadline(value: str | None) -> date | None:
@@ -167,7 +170,9 @@ class Classifier:
         self.store = store
         self.gateway = gateway
 
-    def classify(self, rows: Sequence[EmailRow]) -> dict[str, Classification]:
+    def classify(
+        self, rows: Sequence[EmailRow], bodies: Mapping[str, str] | None = None
+    ) -> dict[str, Classification]:
         taxonomy = self.store.active_taxonomy()
         if taxonomy is None:
             raise Abort("nenhuma taxonomia ativa; rode as migrações (alembic upgrade head)")
@@ -175,7 +180,10 @@ class Classifier:
         prompt = build_classify_prompt(
             taxonomy,
             preferences,
-            [EmailIn.of(r) for r in rows],
+            [
+                EmailIn.of(r, (bodies or {}).get(r.id, "")[:BODY_EXCERPT_MAX] or None)
+                for r in rows
+            ],
             CallContext(email_ids=tuple(r.id for r in rows)),
         )
         try:

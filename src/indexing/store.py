@@ -6,11 +6,11 @@ any point can simply run again.
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.db.models import Attachment, Email, EmailEmbedding, RunEmail
-from src.db.rows import AttachmentRow
+from src.db.models import Attachment, Email, EmailEmbedding, Run, RunEmail
+from src.db.rows import AttachmentRow, EmailRow, RunRow
 from src.gmail.full import AttachmentRef, FullMessage
 from src.llm.types import Schema
 
@@ -43,6 +43,14 @@ class AnalysisRecord(Schema):
 class EmailHeader(Schema):
     sender: str | None
     subject: str | None
+
+
+class RunCounts(Schema):
+    emails: int
+    classified: int
+    indexed: int
+    embedded: int
+    attachments: dict[str, int]
 
 
 class NewAttachment(Schema):
@@ -185,3 +193,60 @@ class IndexStore:
                 setattr(a, field, value)
             a.embedding = rec.embedding
             a.status, a.error, a.analyzed_at = "done", None, _now()
+
+    # --- backfill -------------------------------------------------------------
+
+    def backfill_run(self, query: str) -> RunRow:
+        """The one run of this backfill query; created on first use only."""
+        with self.sf.begin() as s:
+            run = s.scalars(select(Run).where(Run.query == query).order_by(Run.id)).first()
+            if run is None:
+                run = Run(query=query)
+                s.add(run)
+                s.flush()
+                s.refresh(run)
+            return RunRow.model_validate(run)
+
+    def unclassified(self, ids: Sequence[str]) -> list[EmailRow]:
+        with self.sf() as s:
+            rows = s.scalars(
+                select(Email).where(Email.id.in_(ids), Email.category.is_(None)).order_by(Email.id)
+            )
+            return [EmailRow.model_validate(r) for r in rows]
+
+    def bodies(self, ids: Sequence[str]) -> dict[str, str]:
+        with self.sf() as s:
+            return {
+                i: b or ""
+                for i, b in s.execute(select(Email.id, Email.body).where(Email.id.in_(ids)))
+            }
+
+    def run_counts(self, run_id: int) -> RunCounts:
+        in_run = select(RunEmail.email_id).where(RunEmail.run_id == run_id).scalar_subquery()
+        with self.sf() as s:
+            def count(*where: ColumnElement[bool]) -> int:
+                q = select(func.count()).select_from(Email).where(Email.id.in_(in_run))
+                for w in where:
+                    q = q.where(w)
+                return s.scalar(q) or 0
+
+            embedded = s.scalar(
+                select(func.count())
+                .select_from(EmailEmbedding)
+                .where(EmailEmbedding.email_id.in_(in_run))
+            ) or 0
+            attachments = {
+                status: n
+                for status, n in s.execute(
+                    select(Attachment.status, func.count())
+                    .where(Attachment.email_id.in_(in_run))
+                    .group_by(Attachment.status)
+                )
+            }
+            return RunCounts(
+                emails=count(),
+                classified=count(Email.category.is_not(None)),
+                indexed=count(Email.indexed_at.is_not(None)),
+                embedded=embedded,
+                attachments=attachments,
+            )
