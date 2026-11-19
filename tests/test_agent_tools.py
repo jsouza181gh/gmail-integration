@@ -16,31 +16,7 @@ from src.classification.seed import V1
 from src.classification.taxonomy import Taxonomy
 from src.db.models import AgentConfig, Email
 from src.llm.types import JsonArgs, Prompt, StructuredResult, TokenUsage, ToolCallRequest
-from tests.agent_fakes import make_ctx, make_email
-
-TAXONOMY = Taxonomy(set_id=1, version=1, spec=V1)
-
-
-class FakeTaxonomy:
-    def active_taxonomy(self) -> Taxonomy | None:
-        return TAXONOMY
-
-    def active_preferences(self, scope: str) -> list[str]:
-        return ["vagas: backend python"]
-
-
-class FakeStructured:
-    def __init__(self, items: Sequence[Item]) -> None:
-        self.items = list(items)
-        self.prompts: list[Prompt] = []
-
-    def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
-    ) -> StructuredResult[T]:
-        self.prompts.append(prompt)
-        parsed = schema.model_validate(BatchResult(items=self.items).model_dump())
-        return StructuredResult[T](parsed=parsed, model="m1", usage=TokenUsage())
-
+from tests.agent_fakes import FakeHistory, FakeStructured, FakeTaxonomy, item as _item, make_ctx, make_email
 
 class FakeMail:
     def __init__(self) -> None:
@@ -60,28 +36,6 @@ class FakeMail:
 
     def list_labels(self) -> tuple[LabelInfo, ...]:
         return (LabelInfo(id="INBOX", name="INBOX", type="system"),)
-
-
-class FakeHistory:
-    def __init__(self) -> None:
-        self.asked: list[str] = []
-
-    def stats(self, address: str) -> SenderStats:
-        self.asked.append(address)
-        return SenderStats(address=address, total=3)
-
-
-def _item(**over: object) -> Item:
-    base = Item(
-        id="a",
-        category="Promoções",
-        reason="oferta de loja",
-        is_relevant=False,
-        deadline="2026-11-29",
-        has_document=False,
-        ephemeral=True,
-    )
-    return base.model_copy(update=over)
 
 
 @pytest.fixture
@@ -232,6 +186,7 @@ EXPECTED_SLICES = {
     "list_emails": ({"mail"}, set()),
     "list_labels": ({"mail"}, set()),
     "propose_action": ({"actions", "email_id", "run"}, {"proposals"}),
+    "apply_labels": ({"labels", "email_id", "policy"}, {"classification"}),
 }
 
 
@@ -246,7 +201,7 @@ def test_tool_slices_are_minimal() -> None:
 def test_registry_offers_per_trigger() -> None:
     reg = build_registry()
     assert {t.name for t in reg.for_model("webhook")} == {"get_email_body", "propose_action"}
-    assert {t.name for t in reg.for_model("chat")} == set(EXPECTED_SLICES)
+    assert {t.name for t in reg.for_model("chat")} == set(EXPECTED_SLICES) - {"apply_labels"}
 
 
 def _llm(structured: FakeStructured) -> object:

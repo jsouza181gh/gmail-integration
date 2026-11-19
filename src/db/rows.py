@@ -39,6 +39,15 @@ class EmailRow(Row):
     updated_at: datetime
 
 
+class AgentConfigRow(Row):
+    id: int
+    version: int
+    active: bool
+    decide_prompt: str
+    max_turns: int
+    created_at: datetime
+
+
 class AgentRunRow(Row):
     id: int
     trigger: str

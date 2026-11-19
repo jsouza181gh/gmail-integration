@@ -10,6 +10,7 @@ from src.agent.registry import AgentTool, Registry, ToolEntry
 from src.agent.state import AgentState, EmailFacts
 from src.agent.tools.act import ActCtx, ActState, propose_action
 from src.agent.tools.classify import ClassifyCtx, ClassifyState, classify_email
+from src.agent.tools.labels import LabelCtx, LabelState, apply_labels
 from src.agent.tools.mail import (
     BodyCtx,
     BodyState,
@@ -22,6 +23,7 @@ from src.agent.tools.mail import (
 from src.agent.tools.sender import SenderCtx, SenderState, sender_history
 from src.agent.types import Trigger
 
+WEBHOOK: frozenset[Trigger] = frozenset({"webhook"})
 BOTH: frozenset[Trigger] = frozenset({"webhook", "chat"})
 CHAT: frozenset[Trigger] = frozenset({"chat"})
 
@@ -32,6 +34,7 @@ SLICES: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "list_emails": (MailCtx, NoState),
     "list_labels": (MailCtx, NoState),
     "propose_action": (ActCtx, ActState),
+    "apply_labels": (LabelCtx, LabelState),
 }
 
 
@@ -79,6 +82,17 @@ def build_registry() -> Registry:
             context_of=lambda c: ActCtx(actions=c.actions, email_id=focus_id(c), run=c.run),
             state_of=lambda c, s: ActState(proposals=s.proposals),
             contexts=BOTH,
+        ),
+        AgentTool(
+            apply_labels,
+            context_of=lambda c: LabelCtx(
+                labels=c.labels,
+                email_id=focus_id(c),
+                policy=c.policy.resolve("apply_labels", c.run.trigger),
+            ),
+            state_of=lambda c, s: LabelState(classification=focus(c, s).classification),
+            contexts=WEBHOOK,
+            offered=frozenset(),  # the flow applies labels right after classifying
         ),
         AgentTool(
             list_emails,

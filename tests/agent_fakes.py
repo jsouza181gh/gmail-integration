@@ -19,6 +19,8 @@ from src.agent.types import (
     SenderStats,
     Trigger,
 )
+from src.classification.classifier import BatchResult, Item
+from src.classification.seed import V1
 from src.classification.taxonomy import Taxonomy
 from src.db.rows import EmailRow
 from src.llm.types import AssistantTurn, Prompt, StructuredResult, TokenUsage, ToolCallRequest
@@ -156,3 +158,63 @@ def make_ctx(
     fields.update(extra or {})
     fields.update(deps)
     return AgentContext.model_validate(fields)
+
+
+TAXONOMY = Taxonomy(set_id=1, version=1, spec=V1)
+
+
+class FakeTaxonomy:
+    def active_taxonomy(self) -> Taxonomy | None:
+        return TAXONOMY
+
+    def active_preferences(self, scope: str) -> list[str]:
+        return ["vagas: backend python"]
+
+
+def item(**over: object) -> Item:
+    base = Item(
+        id="a",
+        category="Promoções",
+        reason="oferta de loja",
+        is_relevant=False,
+        deadline="2026-11-29",
+        has_document=False,
+        ephemeral=True,
+    )
+    return base.model_copy(update=over)
+
+
+class FakeStructured:
+    def __init__(self, items: Sequence[Item] | Exception) -> None:
+        self.items = items
+        self.prompts: list[Prompt] = []
+
+    def generate_structured[T: BaseModel](
+        self, prompt: Prompt, schema: type[T]
+    ) -> StructuredResult[T]:
+        self.prompts.append(prompt)
+        if isinstance(self.items, Exception):
+            raise self.items
+        parsed = schema.model_validate(BatchResult(items=list(self.items)).model_dump())
+        return StructuredResult[T](parsed=parsed, model="m1", usage=TokenUsage())
+
+
+class FakeLabels:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.applied: list[tuple[str, tuple[str, ...]]] = []
+        self.error = error
+
+    def apply(self, email_id: str, names: Sequence[str]) -> tuple[str, ...]:
+        if self.error:
+            raise self.error
+        self.applied.append((email_id, tuple(names)))
+        return tuple(names)
+
+
+class FakeHistory:
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def stats(self, address: str) -> SenderStats:
+        self.asked.append(address)
+        return SenderStats(address=address, total=3)

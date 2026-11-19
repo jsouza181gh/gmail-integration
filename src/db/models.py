@@ -234,6 +234,18 @@ class AgentStep(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class GmailLabel(Base):
+    """Cache of the Gmail ids of the labels the agent applies, by name."""
+
+    __tablename__ = "gmail_labels"
+
+    name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    gmail_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 # --- agent: policies, suggested actions, automation rules ---------------------
 
 class ToolPolicy(Base):

@@ -112,22 +112,19 @@ def build_app() -> FastAPI:
 
     load_dotenv()
 
-    from src.classification.classifier import Classifier
     from src.db.store import Store
     from src.gmail.client import get_gmail_service
     from src.gmail.watch import ensure_watch
-    from src.llm.config import build_gateway
-    from src.llm.recorder import DbCallRecorder
+    from src.jobs.store import JobStore
     from src.services.sync import SyncCoordinator, sync_inbox
 
     store = Store()
-    # One gateway per process: free-mode pacing state lives in it. Chat models
-    # are created lazily, so a missing key only fails the first classification.
-    classifier = Classifier(store, build_gateway(DbCallRecorder(store.sf)))
+    # The API only ingests and enqueues; the worker process runs the agent.
+    jobs = JobStore(store.sf)
 
     def run_sync() -> None:
         # googleapiclient services are not thread-safe: one per sync run.
-        sync_inbox(store, get_gmail_service(), classifier)
+        sync_inbox(store, get_gmail_service(), jobs)
 
     coordinator = SyncCoordinator(run_sync)
 

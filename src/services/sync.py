@@ -1,4 +1,4 @@
-"""Incremental sync: Gmail history -> emails table -> classification."""
+"""Incremental sync: Gmail history -> emails table -> one agent job per new email."""
 import threading
 from collections.abc import Callable
 
@@ -6,9 +6,10 @@ from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from pydantic import BaseModel
 
-from src.classification.classifier import Abort, EmailClassifier, classify_pending
 from src.db.store import Store
 from src.gmail.messages import MessageSummary, message_summary
+from src.jobs.store import JobStore
+from src.jobs.types import ProcessEmailJob
 from src.llm.types import Schema
 from src.utils.console import log
 
@@ -23,7 +24,7 @@ class HistoryExpired(Exception):
 
 class SyncResult(Schema):
     ingested: int
-    pending: int
+    enqueued: int
 
 
 # --- slices of Gmail API responses we read ---------------------------------
@@ -118,11 +119,11 @@ def _summary_or_none(service: Resource, message_id: str) -> MessageSummary | Non
         raise
 
 
-def sync_inbox(store: Store, service: Resource, classifier: EmailClassifier) -> SyncResult:
-    """Ingest new INBOX mail, advance the cursor, classify what is pending.
+def sync_inbox(store: Store, service: Resource, jobs: JobStore) -> SyncResult:
+    """Ingest new INBOX mail, advance the cursor, enqueue `process_email` jobs.
 
-    The cursor moves right after ingest: from then on the emails are durable
-    and any classification failure is retried through the pending rows.
+    The cursor moves right after ingest: from then on the emails are durable.
+    Enqueueing is idempotent per email, so a repeated push never duplicates work.
     """
     state = store.get_watch_state()
     if state is None:
@@ -141,12 +142,8 @@ def sync_inbox(store: Store, service: Resource, classifier: EmailClassifier) -> 
     store.ingest(run_id, [e.id for e in new_emails] + list(known), new_emails)
     store.set_history_id(latest)
 
-    try:
-        classify_pending(store, classifier, run_id)
-    except Abort as exc:
-        log(f"classificação interrompida: {exc}; pendentes ficam para o próximo sync")
-
-    return SyncResult(ingested=len(new_emails), pending=store.count_pending(run_id))
+    enqueued = sum(jobs.enqueue(ProcessEmailJob(email_id=e.id)) for e in new_emails)
+    return SyncResult(ingested=len(new_emails), enqueued=enqueued)
 
 
 class SyncCoordinator:

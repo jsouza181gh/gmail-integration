@@ -22,8 +22,11 @@ HEARTBEAT = Path(os.getenv("WORKER_HEARTBEAT", "/tmp/worker-heartbeat"))
 
 
 def build_handlers(store: Store, jobs: JobStore) -> dict[JobKind, Handler]:
-    """Job kind -> handler. Filled in as the agent flows land."""
-    return {}
+    """Job kind -> handler."""
+    from src.agent.wiring import Agent
+
+    agent = Agent(store, jobs)
+    return {"process_email": agent.process_email.handle}
 
 
 def main() -> None:

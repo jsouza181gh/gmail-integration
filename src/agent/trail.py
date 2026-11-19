@@ -84,6 +84,18 @@ class Trail:
         """A step that is only a record (e.g. why the flow skipped something)."""
         self.close_step(self.open_step(run_id, "note", name, "flow"), "ok", detail)
 
+    def has_done_run(self, email_id: str, config_id: int) -> bool:
+        """True when this email already went through this config successfully."""
+        with self.sf() as s:
+            found = s.scalar(
+                select(AgentRun.id).where(
+                    AgentRun.email_id == email_id,
+                    AgentRun.config_id == config_id,
+                    AgentRun.status.in_(("done", "truncated")),
+                ).limit(1)
+            )
+        return found is not None
+
     def run(self, run_id: int) -> AgentRunRow:
         with self.sf() as s:
             return AgentRunRow.model_validate(s.get_one(AgentRun, run_id))

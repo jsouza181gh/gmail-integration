@@ -14,7 +14,7 @@ TABLES = {
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
     "jobs", "agent_configs", "agent_runs", "agent_steps",
-    "tool_policies", "automation_rules", "suggested_actions",
+    "tool_policies", "automation_rules", "suggested_actions", "gmail_labels",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
@@ -74,3 +74,10 @@ def test_seed_tool_policies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         rows = set(c.execute(text("select target, trigger, policy from tool_policies")).all())
     assert ("apply_labels", "webhook", "auto") in rows and len(rows) == 12
     assert {p for t, _, p in rows if t != "apply_labels"} == {"suggest"}
+
+
+def test_seed_agent_config_v1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, url = _upgraded(tmp_path, monkeypatch)
+    with create_engine(url).connect() as c:
+        rows = c.execute(text("select version, active, max_turns from agent_configs")).all()
+    assert [tuple(r) for r in rows] == [(1, True, 4)]
