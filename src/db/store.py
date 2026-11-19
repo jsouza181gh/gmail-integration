@@ -205,7 +205,52 @@ class Store:
                 .values(category=category, reason=reason)
             )
 
-    # --- report -----------------------------------------------------------
+    def start_reclassify_run(self, only_outdated: bool = True) -> int:
+        """Run over emails already stored, cleared for the active taxonomy.
+
+        only_outdated: just emails classified with another (or no) taxonomy
+        version; False: every email. A run with pending emails is resumed
+        as is, so re-running after a crash never clears finished work.
+        """
+        taxonomy = self.active_taxonomy()
+        if taxonomy is None:
+            raise RuntimeError("nenhuma taxonomia ativa; rode as migrações")
+        query = f"reclassify:v{taxonomy.version}" + ("" if only_outdated else ":all")
+        with self.sf.begin() as s:
+            latest = s.scalars(
+                select(Run).where(Run.query == query).order_by(Run.id.desc())
+            ).first()
+            if latest is not None and self._pending(s, latest.id):
+                return latest.id
+            run = Run(query=query, pages=0, fetch_done=True)
+            s.add(run)
+            s.flush()
+            target = select(Email.id)
+            if only_outdated:
+                target = target.where(
+                    (Email.category_set_id.is_(None))
+                    | (Email.category_set_id != taxonomy.set_id)
+                )
+            ids = list(s.scalars(target))
+            if ids:
+                s.execute(
+                    update(Email)
+                    .where(Email.id.in_(ids))
+                    .values(
+                        category=None,
+                        reason=None,
+                        is_relevant=None,
+                        deadline=None,
+                        has_document=None,
+                        ephemeral=None,
+                        category_set_id=None,
+                        attempts=0,
+                        last_error=None,
+                    )
+                )
+                _insert_ignore(s, RunEmail, [{"run_id": run.id, "email_id": i} for i in ids])
+            return run.id
+
 
     def report_rows(self, run_id: int) -> list[EmailRow]:
         with self.sf() as s:
