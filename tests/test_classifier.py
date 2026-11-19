@@ -18,7 +18,7 @@ from src.db.rows import EmailRow
 from src.db.store import Store
 from src.gmail.messages import MessageSummary
 from src.llm.errors import LLMFatalError
-from src.llm.types import Prompt, StructuredResult, TokenUsage
+from src.llm.types import Check, Prompt, StructuredResult, TokenUsage
 
 Script = Callable[[Prompt], BatchResult | Exception]
 
@@ -30,7 +30,7 @@ class FakeGateway:
         self.schemas: list[type[BaseModel]] = []
 
     def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
+        self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]:
         self.prompts.append(prompt)
         self.schemas.append(schema)
@@ -173,3 +173,19 @@ def test_classify_pending_gives_up_after_unknown_categories(store_with_tax: Stor
     classify_pending(store_with_tax, Classifier(store_with_tax, gw), run_id)
     row = store_with_tax.report_rows(run_id)[0]
     assert row.category == "Não classificado" and len(gw.prompts) == 4
+
+
+def test_category_html_entities_and_case_are_normalized() -> None:
+    from src.classification.classifier import Item, to_classifications
+    from src.classification.seed import V1
+    from src.classification.taxonomy import Taxonomy
+
+    tax = Taxonomy(set_id=1, version=1, spec=V1)
+    items = [
+        Item(id="a", category="Promo&ccedil;&otilde;es", reason="r", is_relevant=False,
+             deadline=None, has_document=False, ephemeral=True),
+        Item(id="b", category="infra/dev", reason="r", is_relevant=True,
+             deadline=None, has_document=False, ephemeral=False),
+    ]
+    out = to_classifications(items, {"a", "b"}, tax)
+    assert (out["a"].category, out["b"].category) == ("Promoções", "Infra/Dev")

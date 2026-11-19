@@ -5,7 +5,9 @@ through Store, so a crash resumes where it stopped. Retries, pacing and model
 fallback live in the gateway. Taxonomy and preferences are re-read from the
 database on every batch, so changes apply without a restart.
 """
+import html
 import os
+import unicodedata
 from collections.abc import Sequence
 from datetime import date
 from typing import Protocol
@@ -98,6 +100,17 @@ def _parse_deadline(value: str | None) -> date | None:
         return None
 
 
+def _key(name: str) -> str:
+    return unicodedata.normalize("NFC", html.unescape(name)).strip().casefold()
+
+
+def canonical_category(name: str, taxonomy: Taxonomy) -> str | None:
+    """The taxonomy's spelling of `name`, tolerating HTML entities copied from
+    the email, case and Unicode normalization; None when it is not a category."""
+    wanted = _key(name)
+    return next((n for n in taxonomy.names if _key(n) == wanted), None)
+
+
 def build_classify_prompt(
     taxonomy: Taxonomy,
     preferences: Sequence[str],
@@ -119,13 +132,13 @@ def to_classifications(
     items: Sequence[Item], wanted: set[str], taxonomy: Taxonomy
 ) -> dict[str, Classification]:
     """Keep only items for requested ids with a category of the active taxonomy."""
-    valid = set(taxonomy.names)
     out: dict[str, Classification] = {}
     for i in items:
-        if i.id not in wanted or i.category not in valid:
+        category = canonical_category(i.category, taxonomy)
+        if i.id not in wanted or category is None:
             continue
         out[i.id] = Classification(
-            category=i.category,
+            category=category,
             reason=i.reason.strip()[:REASON_MAX],
             is_relevant=i.is_relevant,
             deadline=_parse_deadline(i.deadline),

@@ -29,6 +29,7 @@ from src.llm.types import (
     AssistantTurn,
     CallRecord,
     CallRecorder,
+    Check,
     ChatMessage,
     ChatModelLike,
     ErrorKind,
@@ -264,7 +265,7 @@ class LLMGateway:
         ) from last_exc
 
     def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
+        self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]:
         def call(chat: ChatModelLike, messages: list[BaseMessage]) -> _Answer[T]:
             runnable = chat.with_structured_output(schema, include_raw=True)
@@ -274,6 +275,9 @@ class LLMGateway:
                 raise _BadOutput(
                     str(out.parsing_error or "empty structured output"), usage, out.raw.text
                 )
+            problem = check(out.parsed) if check is not None else None
+            if problem is not None:
+                raise _BadOutput(f"validação: {problem}", usage, out.raw.text)
             return _Answer(out.parsed, usage, out.raw.text)
 
         parsed, model, usage = self._attempts(prompt, call)

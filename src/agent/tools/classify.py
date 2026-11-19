@@ -43,8 +43,16 @@ def classify_email(
         [EmailIn.of(state.email, body=state.body)],
         ctx.call,
     )
-    result = ctx.llm.generate_structured(prompt, BatchResult)
-    found = to_classifications(result.parsed.items, {state.email.id}, taxonomy)
+    wanted = {state.email.id}
+
+    def check(batch: BatchResult) -> str | None:
+        if to_classifications(batch.items, wanted, taxonomy):
+            return None
+        got = [i.category for i in batch.items]
+        return f"nenhuma categoria válida para {state.email.id} (veio {got})"
+
+    result = ctx.llm.generate_structured(prompt, BatchResult, check)
+    found = to_classifications(result.parsed.items, wanted, taxonomy)
     c = found.get(state.email.id)
     if c is None:
         raise ValueError("o modelo não devolveu uma classificação válida para este e-mail")

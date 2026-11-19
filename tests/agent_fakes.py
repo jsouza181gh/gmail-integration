@@ -23,7 +23,7 @@ from src.classification.classifier import BatchResult, Item
 from src.classification.seed import V1
 from src.classification.taxonomy import Taxonomy
 from src.db.rows import EmailRow
-from src.llm.types import AssistantTurn, Prompt, StructuredResult, TokenUsage, ToolCallRequest
+from src.llm.types import Check, AssistantTurn, Prompt, StructuredResult, TokenUsage, ToolCallRequest
 
 
 def make_email(email_id: str = "a", **over: object) -> EmailRow:
@@ -50,7 +50,7 @@ def make_email(email_id: str = "a", **over: object) -> EmailRow:
 
 class NoStructured:
     def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
+        self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]:
         raise AssertionError("structured LLM call not expected")
 
@@ -190,7 +190,7 @@ class FakeStructured:
         self.prompts: list[Prompt] = []
 
     def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
+        self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]:
         self.prompts.append(prompt)
         if isinstance(self.items, Exception):

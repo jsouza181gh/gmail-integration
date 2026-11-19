@@ -1,6 +1,6 @@
 """Typed contracts of the LLM gateway."""
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal, Protocol, Self, runtime_checkable
 
 from langchain_core.messages import BaseMessage
@@ -129,10 +129,15 @@ class CallRecorder(Protocol):
     def record(self, rec: CallRecord) -> None: ...
 
 
+# Semantic validation of a parsed output: an error message makes the gateway
+# treat the answer as bad output and retry right away (next model).
+type Check[T] = Callable[[T], str | None]
+
+
 @runtime_checkable
 class StructuredGenerator(Protocol):
     def generate_structured[T: BaseModel](
-        self, prompt: Prompt, schema: type[T]
+        self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
     ) -> StructuredResult[T]: ...
 
 

@@ -15,7 +15,7 @@ from src.classification.classifier import BatchResult, Item
 from src.classification.seed import V1
 from src.classification.taxonomy import Taxonomy
 from src.db.models import AgentConfig, Email
-from src.llm.types import JsonArgs, Prompt, StructuredResult, TokenUsage, ToolCallRequest
+from src.llm.types import Check, JsonArgs, Prompt, StructuredResult, TokenUsage, ToolCallRequest
 from tests.agent_fakes import FakeHistory, FakeStructured, FakeTaxonomy, item as _item, make_ctx, make_email
 
 class FakeMail:
@@ -209,3 +209,18 @@ def _llm(structured: FakeStructured) -> object:
     from tests.agent_fakes import FakeToolCaller
 
     return LLMDeps(structured=structured, tools=FakeToolCaller([]))
+
+
+def test_classify_email_retries_when_category_invalid(trail: Trail) -> None:
+    class Flaky(FakeStructured):
+        def generate_structured[T: BaseModel](
+            self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
+        ) -> StructuredResult[T]:
+            assert check is not None
+            first = schema.model_validate(BatchResult(items=[_item(category="Urgente")]).model_dump())
+            self.checked = check(first)
+            return super().generate_structured(prompt, schema)
+
+    llm = Flaky([_item()])
+    res, _ = _exec(trail, "classify_email", llm=_llm(llm), taxonomy=FakeTaxonomy())
+    assert res.ok and llm.checked is not None and "Urgente" in llm.checked

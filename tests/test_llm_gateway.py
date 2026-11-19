@@ -352,3 +352,16 @@ def test_thought_signatures_round_trip_to_langchain() -> None:
 def test_signatures_only_on_ai_messages() -> None:
     with pytest.raises(ValidationError):
         ChatMessage(role="human", content="x", signatures={"c1": "s"})
+
+
+def test_semantic_check_failure_retries_on_next_model() -> None:
+    rec, sleeps = ListRecorder(), list[float]()
+    g = gw(
+        models=["m1", "m2"],
+        chats={"m1": FakeChat([Out(x=-1)]), "m2": FakeChat([Out(x=2)])},
+        recorder=rec,
+        sleeps=sleeps,
+    )
+    res = g.generate_structured(P, Out, check=lambda o: "x negativo" if o.x < 0 else None)
+    assert res.parsed == Out(x=2) and res.model == "m2" and sleeps == []
+    assert rec.items[0].error_kind == "bad_output" and "x negativo" in (rec.items[0].error or "")
