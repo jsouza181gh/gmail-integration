@@ -170,8 +170,8 @@ class LlmCall(Base):
     audio_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     response_text: Mapped[str | None] = mapped_column(Text)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"))
-    agent_run_id: Mapped[int | None] = mapped_column(Integer, index=True)
-    agent_step_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    agent_run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    agent_step_id: Mapped[int | None] = mapped_column(ForeignKey("agent_steps.id"), index=True)
 
 
 class LlmCallMessage(Base):
@@ -182,6 +182,55 @@ class LlmCallMessage(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+# --- agent: config versions and run trail ------------------------------------
+
+class AgentConfig(Base):
+    """Immutable version of the agent's behaviour; one is active."""
+
+    __tablename__ = "agent_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    decide_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    max_turns: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"), index=True)
+    config_id: Mapped[int] = mapped_column(ForeignKey("agent_configs.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentStep(Base):
+    """One event of a run, in order. `detail` is audit text, never parsed back."""
+
+    __tablename__ = "agent_steps"
+    __table_args__ = (UniqueConstraint("run_id", "position"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Job(Base):

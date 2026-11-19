@@ -13,7 +13,7 @@ TABLES = {
     "runs", "emails", "run_emails", "watch_state",
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
-    "jobs",
+    "jobs", "agent_configs", "agent_runs", "agent_steps",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",

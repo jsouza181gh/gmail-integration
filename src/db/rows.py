@@ -39,6 +39,31 @@ class EmailRow(Row):
     updated_at: datetime
 
 
+class AgentRunRow(Row):
+    id: int
+    trigger: str
+    email_id: str | None
+    config_id: int
+    status: str
+    summary: str | None
+    error: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class AgentStepRow(Row):
+    id: int
+    run_id: int
+    position: int
+    kind: str
+    name: str
+    source: str
+    status: str
+    detail: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
 class WatchStateRow(Row):
     id: int
     email_address: str
