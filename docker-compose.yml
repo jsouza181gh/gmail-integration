@@ -1,4 +1,7 @@
 x-app: &app
+  # CI publishes one tag per commit; deploy/deploy.sh sets APP_TAG.
+  # `docker compose build` still builds locally under the same name.
+  image: ghcr.io/jsouza181gh/gmail-integration:${APP_TAG:-latest}
   build: .
   env_file: .env
   environment:
