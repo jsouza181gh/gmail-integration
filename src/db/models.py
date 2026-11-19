@@ -40,6 +40,11 @@ class Run(Base):
 
 class Email(Base):
     __tablename__ = "emails"
+    __table_args__ = (
+        Index("ix_emails_received_at", "received_at"),
+        Index("ix_emails_category_received", "category", "received_at"),
+        Index("ix_emails_relevant_deadline", "is_relevant", "deadline"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     sender: Mapped[str | None] = mapped_column(Text)
@@ -313,6 +318,7 @@ class SuggestedAction(Base):
             sqlite_where=text("status IN ('pending', 'approved')"),
         ),
         Index("ix_suggested_actions_status", "status"),
+        Index("ix_suggested_actions_email", "email_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -105,10 +105,11 @@ def create_app(
     )
     app.middleware("http")(security_middleware(RateLimiter()))
     if api is not None:
-        from src.api.routes import auth
+        from src.api.routes import actions, auth, mail
 
         app.state.deps = api
-        app.include_router(auth.router)
+        for module in (auth, mail, actions):
+            app.include_router(module.router)
 
     @app.post("/webhooks/gmail")
     async def gmail_webhook(request: Request, background: BackgroundTasks) -> Response:
