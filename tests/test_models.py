@@ -86,3 +86,38 @@ def test_attachment_unique_per_part(session_factory):
     with pytest.raises(IntegrityError):
         with session_factory.begin() as s:
             s.add(att())
+
+
+def test_auth_tables_roundtrip(session_factory):
+    from datetime import UTC, datetime, timedelta
+
+    from src.db.models import AuthSession, RecoveryCode, User
+
+    now = datetime.now(UTC)
+    with session_factory.begin() as s:
+        u = User(username="joao", password_hash="h", totp_secret_enc="e", created_at=now,
+                 password_changed_at=now)
+        s.add(u)
+        s.flush()
+        s.add_all([RecoveryCode(user_id=u.id, code_hash=f"c{i}") for i in range(2)])
+        s.add(AuthSession(user_id=u.id, family_id="f1", token_hash="t1", created_at=now,
+                          last_used_at=now, expires_at=now + timedelta(days=14), ip="1.2.3.4",
+                          user_agent="ua"))
+    with session_factory() as s:
+        assert s.get_one(User, 1).username == "joao"
+        assert s.get_one(AuthSession, 1).revoked_at is None
+
+
+def test_ip_block_pk_unique(session_factory):
+    from datetime import UTC, datetime
+
+    from sqlalchemy.exc import IntegrityError
+
+    from src.db.models import IpBlock
+
+    now = datetime.now(UTC)
+    with session_factory.begin() as s:
+        s.add(IpBlock(ip="1.2.3.4", reason="r", created_at=now))
+    with pytest.raises(IntegrityError):
+        with session_factory.begin() as s:
+            s.add(IpBlock(ip="1.2.3.4", reason="r", created_at=now))

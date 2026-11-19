@@ -16,6 +16,8 @@ TABLES = {
     "jobs", "agent_configs", "agent_runs", "agent_steps",
     "tool_policies", "automation_rules", "suggested_actions", "gmail_labels", "feedback", "notifications",
     "email_embeddings", "attachments",
+    "users", "recovery_codes", "auth_sessions", "login_failures", "ip_blocks",
+    "security_events", "app_settings", "config_audit",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
