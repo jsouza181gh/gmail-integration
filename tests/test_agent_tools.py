@@ -217,10 +217,28 @@ def test_classify_email_retries_when_category_invalid(trail: Trail) -> None:
             self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
         ) -> StructuredResult[T]:
             assert check is not None
-            first = schema.model_validate(BatchResult(items=[_item(category="Urgente")]).model_dump())
+            # what an unconstrained model could send; the check must flag it
+            first = schema.model_construct(items=[_item(category="Urgente")])
             self.checked = check(first)
             return super().generate_structured(prompt, schema)
 
     llm = Flaky([_item()])
     res, _ = _exec(trail, "classify_email", llm=_llm(llm), taxonomy=FakeTaxonomy())
     assert res.ok and llm.checked is not None and "Urgente" in llm.checked
+
+
+def test_classify_email_sends_taxonomy_constrained_schema(trail: Trail) -> None:
+    seen: list[type[BaseModel]] = []
+
+    class Recording(FakeStructured):
+        def generate_structured[T: BaseModel](
+            self, prompt: Prompt, schema: type[T], check: Check[T] | None = None
+        ) -> StructuredResult[T]:
+            seen.append(schema)
+            return super().generate_structured(prompt, schema, check)
+
+    _exec(trail, "classify_email", llm=_llm(Recording([_item()])), taxonomy=FakeTaxonomy())
+    js = seen[0].model_json_schema()
+    enums = [p["enum"] for d in js["$defs"].values() for k, p in d["properties"].items()
+             if k == "category"]
+    assert enums and "Promoções" in enums[0]

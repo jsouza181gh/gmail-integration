@@ -9,6 +9,7 @@ from src.classification.classifier import (
     PREFERENCE_SCOPE,
     BatchResult,
     EmailIn,
+    batch_schema,
     build_classify_prompt,
     to_classifications,
 )
@@ -51,7 +52,7 @@ def classify_email(
         got = [i.category for i in batch.items]
         return f"nenhuma categoria válida para {state.email.id} (veio {got})"
 
-    result = ctx.llm.generate_structured(prompt, BatchResult, check)
+    result = ctx.llm.generate_structured(prompt, batch_schema(taxonomy), check)
     found = to_classifications(result.parsed.items, wanted, taxonomy)
     c = found.get(state.email.id)
     if c is None:

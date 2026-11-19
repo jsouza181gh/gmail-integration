@@ -10,9 +10,9 @@ import os
 import unicodedata
 from collections.abc import Sequence
 from datetime import date
-from typing import Protocol
+from typing import Literal, Protocol, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, create_model
 
 from src.classification.prompt import build_system_prompt
 from src.classification.taxonomy import Classification, Taxonomy
@@ -52,6 +52,19 @@ class BatchResult(Schema):
     items: list[Item]
 
 
+def batch_schema(taxonomy: Taxonomy) -> type[BatchResult]:
+    """`BatchResult` whose `category` is a Literal of the active taxonomy.
+
+    The taxonomy is versioned in the database, so the Literal is built per
+    version; in the JSON schema it becomes an `enum`, and structured output
+    constrains the model to those exact names.
+    """
+    # Literal[...] over runtime values: typed as str, which is what it narrows.
+    category = cast("type[str]", Literal.__getitem__(tuple(taxonomy.names)))
+    item = create_model("Item", __base__=Item, category=(category, ...))
+    return create_model("BatchResult", __base__=BatchResult, items=(list[item], ...))
+
+
 class EmailIn(Schema):
     """What the model sees of one email (data, never instructions)."""
 
@@ -78,7 +91,7 @@ _EMAILS_IN = TypeAdapter(list[EmailIn])
 
 
 __all__ = [
-    "Abort", "BatchResult", "Classification", "Classifier", "EmailClassifier", "EmailIn", "Item",
+    "Abort", "BatchResult", "batch_schema", "Classification", "Classifier", "EmailClassifier", "EmailIn", "Item",
     "build_classify_prompt", "classify_pending", "to_classifications",
 ]
 
@@ -166,7 +179,7 @@ class Classifier:
             CallContext(email_ids=tuple(r.id for r in rows)),
         )
         try:
-            result = self.gateway.generate_structured(prompt, BatchResult)
+            result = self.gateway.generate_structured(prompt, batch_schema(taxonomy))
         except LLMFatalError as exc:
             raise Abort(str(exc)) from exc
         return to_classifications(result.parsed.items, {r.id for r in rows}, taxonomy)
