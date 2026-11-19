@@ -14,8 +14,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.db.models import Job
 from src.jobs.types import (
     PRIORITY,
+    AnyJob,
+    BackfillPageJob,
     ClaimedJob,
+    DeadJob,
     ExecuteActionJob,
+    IndexAttachmentJob,
+    IndexEmailJob,
     JobCounts,
     ProcessEmailJob,
     idempotency_key,
@@ -30,12 +35,35 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _payload(job: Job) -> ProcessEmailJob | ExecuteActionJob:
+def _payload(job: Job) -> AnyJob:
     if job.kind == "process_email" and job.email_id is not None:
         return ProcessEmailJob(email_id=job.email_id)
     if job.kind == "execute_action" and job.action_id is not None:
         return ExecuteActionJob(action_id=job.action_id)
+    if job.kind == "index_email" and job.email_id is not None:
+        return IndexEmailJob(email_id=job.email_id)
+    if job.kind == "index_attachment" and job.attachment_id is not None:
+        return IndexAttachmentJob(attachment_id=job.attachment_id)
+    if job.kind == "backfill_page" and job.run_id is not None and job.page_no is not None:
+        return BackfillPageJob(run_id=job.run_id, page_no=job.page_no)
     raise ValueError(f"job {job.id}: kind/payload inconsistentes ({job.kind})")
+
+
+def _columns(payload: AnyJob) -> dict[str, str | int | None]:
+    """The typed payload columns of one job row."""
+    cols: dict[str, str | int | None] = {
+        "email_id": None, "action_id": None, "attachment_id": None, "run_id": None, "page_no": None,
+    }
+    match payload:
+        case ProcessEmailJob(email_id=e) | IndexEmailJob(email_id=e):
+            cols["email_id"] = e
+        case ExecuteActionJob(action_id=a):
+            cols["action_id"] = a
+        case IndexAttachmentJob(attachment_id=a):
+            cols["attachment_id"] = a
+        case BackfillPageJob(run_id=r, page_no=n):
+            cols["run_id"], cols["page_no"] = r, n
+    return cols
 
 
 class JobStore:
@@ -50,7 +78,7 @@ class JobStore:
         self._now = clock
         self.max_attempts = max_attempts
 
-    def enqueue(self, payload: ProcessEmailJob | ExecuteActionJob) -> bool:
+    def enqueue(self, payload: AnyJob) -> bool:
         """False when a job with the same idempotency key already exists."""
         now = self._now()
         row = {
@@ -61,8 +89,7 @@ class JobStore:
             "max_attempts": self.max_attempts,
             "run_after": now,
             "idempotency_key": idempotency_key(payload),
-            "email_id": payload.email_id if isinstance(payload, ProcessEmailJob) else None,
-            "action_id": payload.action_id if isinstance(payload, ExecuteActionJob) else None,
+            **_columns(payload),
             "created_at": now,
         }
         with self.sf.begin() as s:
@@ -117,6 +144,61 @@ class JobStore:
             job.run_after = now + timedelta(seconds=delay)
             return "retry"
 
+    def defer(self, job_id: int, seconds: int, reason: str) -> None:
+        """Back to the queue later without charging the attempt (e.g. quota)."""
+        with self.sf.begin() as s:
+            job = s.get_one(Job, job_id)
+            job.status = "queued"
+            job.attempts = max(0, job.attempts - 1)
+            job.run_after = self._now() + timedelta(seconds=seconds)
+            job.last_error = reason[:ERROR_MAX]
+            job.locked_at = None
+            job.locked_by = None
+
+    def requeue_orphans(self) -> int:
+        """Every running job goes back, attempt refunded.
+
+        Called once at worker start-up: there is one worker per database, so
+        a job still marked running was interrupted (deploy, crash), not slow.
+        """
+        with self.sf.begin() as s:
+            result = s.execute(
+                update(Job)
+                .where(Job.status == "running")
+                .values(
+                    status="queued",
+                    attempts=func.max(Job.attempts - 1, 0)
+                    if s.get_bind().dialect.name == "sqlite"
+                    else func.greatest(Job.attempts - 1, 0),
+                    locked_at=None,
+                    locked_by=None,
+                )
+            )
+            return result.rowcount if isinstance(result, CursorResult) else 0
+
+    def requeue(self, job_id: int) -> bool:
+        """A dead job gets a fresh set of attempts; False if it was not dead."""
+        with self.sf.begin() as s:
+            result = s.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status == "dead")
+                .values(status="queued", attempts=0, run_after=self._now(), finished_at=None)
+            )
+            return bool(result.rowcount) if isinstance(result, CursorResult) else False
+
+    def dead(self, limit: int, kind: str | None = None) -> list[DeadJob]:
+        q = select(Job).where(Job.status == "dead").order_by(Job.id.desc()).limit(limit)
+        if kind is not None:
+            q = q.where(Job.kind == kind)
+        with self.sf() as s:
+            return [
+                DeadJob(
+                    id=j.id, kind=j.kind, attempts=j.attempts,
+                    last_error=j.last_error, finished_at=j.finished_at,
+                )
+                for j in s.scalars(q)
+            ]
+
     def requeue_stale(self, older_than: timedelta) -> int:
         """Running jobs whose worker died go back to the queue."""
         with self.sf.begin() as s:
@@ -131,3 +213,13 @@ class JobStore:
         with self.sf() as s:
             rows = s.execute(select(Job.status, func.count()).group_by(Job.status)).all()
         return JobCounts.model_validate({status: n for status, n in rows})
+
+    def counts_by_kind(self) -> dict[str, JobCounts]:
+        with self.sf() as s:
+            rows = s.execute(
+                select(Job.kind, Job.status, func.count()).group_by(Job.kind, Job.status)
+            ).all()
+        grouped: dict[str, dict[str, int]] = {}
+        for kind, status, n in rows:
+            grouped.setdefault(kind, {})[status] = n
+        return {k: JobCounts.model_validate(v) for k, v in sorted(grouped.items())}

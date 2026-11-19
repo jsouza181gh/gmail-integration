@@ -1,16 +1,26 @@
 """Typed job payloads; one model per kind, discriminated by `kind`."""
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import Field
 
 from src.llm.types import Schema
 
-JobKind = Literal["process_email", "execute_action"]
+JobKind = Literal[
+    "process_email", "execute_action", "index_email", "index_attachment", "backfill_page"
+]
 JobStatus = Literal["queued", "running", "done", "dead"]
 
 # Higher runs first. Spec order: chat > new email > approved action > backfill
-# (chat enters with 50 and backfill with 0 in later subprojects).
-PRIORITY: dict[JobKind, int] = {"process_email": 30, "execute_action": 20}
+# (chat enters with 50 in a later subproject). Indexing new mail outranks the
+# attachments it discovers, and both outrank the history backfill.
+PRIORITY: dict[JobKind, int] = {
+    "process_email": 30,
+    "execute_action": 20,
+    "index_email": 10,
+    "index_attachment": 5,
+    "backfill_page": 0,
+}
 
 
 class ProcessEmailJob(Schema):
@@ -23,13 +33,41 @@ class ExecuteActionJob(Schema):
     action_id: int
 
 
-JobPayload = Annotated[ProcessEmailJob | ExecuteActionJob, Field(discriminator="kind")]
+class IndexEmailJob(Schema):
+    kind: Literal["index_email"] = "index_email"
+    email_id: str
 
 
-def idempotency_key(payload: ProcessEmailJob | ExecuteActionJob) -> str:
-    if isinstance(payload, ProcessEmailJob):
-        return f"process_email:{payload.email_id}"
-    return f"execute_action:{payload.action_id}"
+class IndexAttachmentJob(Schema):
+    kind: Literal["index_attachment"] = "index_attachment"
+    attachment_id: int
+
+
+class BackfillPageJob(Schema):
+    kind: Literal["backfill_page"] = "backfill_page"
+    run_id: int
+    page_no: int
+
+
+type AnyJob = (
+    ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob | BackfillPageJob
+)
+JobPayload = Annotated[
+    ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob | BackfillPageJob,
+    Field(discriminator="kind"),
+]
+
+
+def idempotency_key(payload: AnyJob) -> str:
+    match payload:
+        case ProcessEmailJob(email_id=e) | IndexEmailJob(email_id=e):
+            return f"{payload.kind}:{e}"
+        case ExecuteActionJob(action_id=a):
+            return f"execute_action:{a}"
+        case IndexAttachmentJob(attachment_id=a):
+            return f"index_attachment:{a}"
+        case BackfillPageJob(run_id=r, page_no=n):
+            return f"backfill_page:{r}:{n}"
 
 
 class ClaimedJob(Schema):
@@ -43,3 +81,11 @@ class JobCounts(Schema):
     running: int = 0
     done: int = 0
     dead: int = 0
+
+
+class DeadJob(Schema):
+    id: int
+    kind: str
+    attempts: int
+    last_error: str | None
+    finished_at: datetime | None

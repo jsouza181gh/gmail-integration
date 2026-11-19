@@ -180,3 +180,103 @@ def test_worker_without_handler_fails_job(jobs: JobStore) -> None:
     with jobs.sf() as s:
         row = s.scalars(select(Job)).one()
     assert row.status == "queued" and "sem handler" in (row.last_error or "")
+
+
+# --- indexing/backfill kinds, deferral, orphans, dead requeue -----------------
+
+def test_new_kinds_roundtrip_and_priority_order(jobs: JobStore) -> None:
+    from src.jobs.types import BackfillPageJob, IndexAttachmentJob, IndexEmailJob
+
+    jobs.enqueue(BackfillPageJob(run_id=1, page_no=0))
+    jobs.enqueue(IndexAttachmentJob(attachment_id=3))
+    jobs.enqueue(IndexEmailJob(email_id="e"))
+    jobs.enqueue(ProcessEmailJob(email_id="p"))
+    order = []
+    while (c := jobs.claim("w1")) is not None:
+        order.append(c.payload)
+    assert order == [
+        ProcessEmailJob(email_id="p"),
+        IndexEmailJob(email_id="e"),
+        IndexAttachmentJob(attachment_id=3),
+        BackfillPageJob(run_id=1, page_no=0),
+    ]
+
+
+def test_backfill_page_idempotent_per_page(jobs: JobStore) -> None:
+    from src.jobs.types import BackfillPageJob
+
+    assert jobs.enqueue(BackfillPageJob(run_id=1, page_no=0)) is True
+    assert jobs.enqueue(BackfillPageJob(run_id=1, page_no=0)) is False
+    assert jobs.enqueue(BackfillPageJob(run_id=1, page_no=1)) is True
+
+
+def test_deferred_refunds_attempt_and_delays(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    from src.jobs.worker import Deferred
+
+    jobs = JobStore(session_factory, clock=clock.now, max_attempts=1)
+    jobs.enqueue(ProcessEmailJob(email_id="a"))
+
+    def defer(job: ClaimedJob) -> None:
+        raise Deferred(1800, "cota esgotada")
+
+    dead: list[tuple[int, str]] = []
+    w = Worker(jobs, {"process_email": defer}, on_dead=lambda j, e: dead.append((j.id, e)),
+               poll_s=0, sleep=lambda _: None, worker_id="w1", heartbeat=None)
+    assert w.run_once() is True
+    with session_factory() as s:
+        row = s.scalars(select(Job)).one()
+    assert (row.status, row.attempts, dead) == ("queued", 0, [])
+    assert _naive(row.run_after) == _naive(clock.now() + timedelta(seconds=1800))
+    assert "cota esgotada" in (row.last_error or "")
+    assert jobs.claim("w1") is None
+    clock.advance(1801)
+    assert jobs.claim("w1") is not None
+
+
+def test_startup_requeues_orphans_without_charge(jobs: JobStore) -> None:
+    jobs.enqueue(ProcessEmailJob(email_id="a"))
+    assert jobs.claim("old-worker") is not None  # then the container is killed
+    seen = Recorder()
+    w = _worker(jobs, {"process_email": seen}, [])
+    loops = iter([False, True])
+    w.run_forever(stop=lambda: next(loops))
+    assert len(seen.seen) == 1 and seen.seen[0].attempts == 1
+    assert jobs.counts().done == 1
+
+
+def test_requeue_dead_job(session_factory: sessionmaker[Session], clock: Clock) -> None:
+    jobs = JobStore(session_factory, clock=clock.now, max_attempts=1)
+    jobs.enqueue(ProcessEmailJob(email_id="a"))
+    job = jobs.claim("w1")
+    assert job is not None and jobs.fail(job.id, "boom") == "dead"
+    dead = jobs.dead(10)
+    assert [(d.id, d.kind, d.last_error) for d in dead] == [(job.id, "process_email", "boom")]
+    assert jobs.requeue(job.id) is True and jobs.requeue(job.id) is False
+    again = jobs.claim("w1")
+    assert again is not None and again.attempts == 1
+
+
+def test_counts_by_kind(jobs: JobStore) -> None:
+    from src.jobs.types import IndexEmailJob
+
+    jobs.enqueue(ProcessEmailJob(email_id="a"))
+    jobs.enqueue(IndexEmailJob(email_id="a"))
+    jobs.enqueue(IndexEmailJob(email_id="b"))
+    by_kind = jobs.counts_by_kind()
+    assert by_kind["index_email"].queued == 2 and by_kind["process_email"].queued == 1
+
+
+def test_cli_requeue_all_dead(session_factory: sessionmaker[Session], clock: Clock) -> None:
+    from src.cli.jobs import dead, requeue, status
+
+    jobs = JobStore(session_factory, clock=clock.now, max_attempts=1)
+    for e in ("a", "b"):
+        jobs.enqueue(ProcessEmailJob(email_id=e))
+        job = jobs.claim("w1")
+        assert job is not None
+        jobs.fail(job.id, "boom")
+    assert "process_email" in status(jobs) and "boom" in dead(jobs, 10, None)
+    assert requeue(jobs, [], True, "process_email").startswith("2 job(s)")
+    assert jobs.counts().queued == 2
