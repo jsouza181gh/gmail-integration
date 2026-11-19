@@ -1,21 +1,28 @@
 # gmail-integration
 
-Classifica e-mails da INBOX automaticamente assim que chegam.
+Assistente que desentulha a INBOX: cada e-mail novo passa por um agente que classifica, etiqueta e propõe ações (arquivar, lixeira, ...) para aprovação.
 
 ```
-Gmail users.watch → Pub/Sub (push) → POST /webhooks/gmail (FastAPI)
-  → sync (history.list desde o cursor salvo) → classificação (Gemini) → Postgres
+Gmail users.watch → Pub/Sub (push) → POST /webhooks/gmail (api)
+  → sync (history.list desde o cursor salvo) → emails (Postgres) → job process_email
+worker → agente: classifica → regras → labels IA/* → histórico do remetente → decide (Gemini + tools)
+  → sugestões (suggested_actions) → aprovação (CLI) → job execute_action → Gmail
 ```
 
 ```
 src/
   api/app.py                  endpoint do webhook, /healthz, renovação diária do watch
-  services/sync.py            Gmail history → tabela emails → classificação
-  gmail/                      client (OAuth), authorize, watch, messages (resumo)
-  classification/classifier.py  LLM (Gemini): lotes, retry, fallback de modelo
-  db/                         session, models (SQLAlchemy), store (persistência)
-  cli/                        classify_unread + main (classifica não lidos sob demanda)
-  agent/tools.py              tools LangChain legadas (sem uso no fluxo atual)
+  services/sync.py            Gmail history → tabela emails → fila de jobs
+  worker.py                   processo do agente (consome a fila)
+  jobs/                       fila no Postgres (SKIP LOCKED, backoff, dead-letter) + loop do worker
+  agent/                      runtime do agente: contexto/estado tipados, tools, loop, trilha, política
+  agent/flows/                process_email (e-mail novo) e execute_action (ação aprovada)
+  alerts/                     alertas por e-mail do servidor para o próprio endereço
+  llm/                        gateway LLM único (LangChain + Gemini)
+  gmail/                      client (OAuth), authorize, watch, messages, reader, labels, actions
+  classification/             taxonomia, prompt e classificador em lote
+  db/                         session, models (SQLAlchemy), rows, store
+  cli/                        enqueue, actions (aprovação), rules, reclassify, classify_unread
   utils/console.py            log
 alembic/                      migrações
 tests/                        pytest
@@ -30,7 +37,7 @@ docker compose up -d --build
 curl http://127.0.0.1:8000/healthz
 ```
 
-Sobe `db` (Postgres, sem porta publicada), `migrate` (`alembic upgrade head`) e `api` (em `127.0.0.1:8000`).
+Sobe `db` (Postgres, sem porta publicada), `migrate` (`alembic upgrade head`), `api` (em `127.0.0.1:8000`) e `worker` (agente).
 Se `secrets/token.json` não existir, a API sobe mesmo assim e loga o erro do watch.
 
 > Se o dono de `secrets/` no host não for UID 1000, defina `APP_UID`/`APP_GID` no `.env` (`id -u`, `id -g`); senão a API não lê o `token.json`.
@@ -41,7 +48,7 @@ Se `secrets/token.json` não existir, a API sobe mesmo assim e loga o erro do wa
 
 - **PR / push em branch:** `ci.yml` roda `pytest`, `mypy` e `alembic upgrade → downgrade → upgrade` num Postgres 16 real.
 - **Merge na `main`:** `deploy.yml` roda o CI de novo, publica `ghcr.io/jsouza181gh/gmail-integration:<sha>` (+ `latest`) e entra na VPS por SSH com uma chave que só executa `deploy/deploy.sh`.
-- **`deploy/deploy.sh <sha>`:** `pg_dump` para `backups/` (guarda 7) → `docker compose up -d` (roda `migrate` antes da `api`) → smoke test (`api` healthy + `/healthz` 200, até 120 s). Se falhar: **rollback automático** para a imagem anterior e o workflow termina vermelho — o GitHub manda o e-mail de falha.
+- **`deploy/deploy.sh <sha>`:** `pg_dump` para `backups/` (guarda 7) → `docker compose up -d` (roda `migrate` antes da `api`) → smoke test (`api` healthy + `/healthz` 200 e `worker` healthy, até 120 s). Se falhar: **rollback automático** para a imagem anterior e o workflow termina vermelho — o GitHub manda o e-mail de falha.
 - O `docker-compose.yml` usado em cada versão vem de dentro da própria imagem; a VPS só guarda `.env`, `secrets/`, `deploy/`, `backups/` e `.deploy/` (estado).
 
 > **Migrações só adicionam** (tabela, coluna nula, índice). Remover/renomear é feito em dois deploys: primeiro o código para de usar, depois a migração remove. Assim o rollback para a imagem anterior sempre funciona com o schema novo. O rollback **não** desfaz migração; para isso existe o backup.
@@ -112,6 +119,30 @@ Sem `WEBHOOK_TOKEN` qualquer um pode chamar o webhook (o estrago é limitado a d
 docker compose run --rm api python -m src.cli.reclassify          # só e-mails de versões antigas
 docker compose run --rm api python -m src.cli.reclassify --all    # todos
 ```
+
+## Agente
+
+Fluxo de cada e-mail novo (`src/agent/flows/process_email.py`), tudo registrado em `agent_runs` → `agent_steps` (cada chamada LLM liga ao seu step em `llm_calls`):
+
+1. **planejado** (o fluxo chama as tools, sem gastar decisão do modelo): `classify_email` → regras de automação → `apply_labels` (`IA/<categoria>`, `IA/Relevante`) → `sender_history`;
+2. se uma regra casou, ela decide; senão um **loop curto** (até `max_turns` da `agent_configs` ativa) com as tools `get_email_body` e `propose_action`, vendo o e-mail (como dado), a classificação, o histórico do remetente e a KB.
+
+Tools são `@tool` do LangChain com `runtime: ToolRuntime[<Fatia>Ctx, <Fatia>State]`: cada uma recebe só a fatia do contexto/estado de que precisa (`src/agent/tools/__init__.py`) e devolve um `StateUpdate` tipado em vez de mutar estado.
+
+**Política:** labels `IA/*` automáticas; marcar lido, estrela, arquivar, lixeira e bloquear remetente viram sugestão (`tool_policies`, padrão `suggest`). `block_sender` nunca roda sozinho (invariante no código). Não existe exclusão permanente.
+
+```bash
+docker compose exec worker python -m src.cli.actions list                       # fila de aprovação
+docker compose exec worker python -m src.cli.actions approve --sender loja.com  # em lote (pede confirmação)
+docker compose exec worker python -m src.cli.actions reject --id 12 --comment "isso eu quero ver"  # vira KB
+docker compose exec worker python -m src.cli.rules add --name lojas --domain loja.com --action trash
+docker compose exec worker python -m src.cli.rules promote --id 1               # suggest → auto
+docker compose exec worker python -m src.cli.enqueue --days 7                   # processa e-mails antigos
+```
+
+- **Bloquear remetente** exige o escopo `gmail.settings.basic`: rode `python -m src.gmail.authorize` de novo (agora pede os dois escopos) e recopie `secrets/token.json` para a VPS. Sem isso, a ação falha com aviso e nada mais quebra.
+- **Alertas** por e-mail (`[gmail-integration] …`, label `Sistema/Alerta`, no máximo 1 por tipo a cada 15 min): job em dead-letter, 3 execuções do agente falhando seguidas, 3 syncs falhando seguidos, falha na renovação do watch.
+- Env: `WORKER_POLL_S` (5), `WORKER_STALE_MIN` (15), `JOB_MAX_ATTEMPTS` (5), `LABELS_DRY_RUN=1` (labels só no log).
 
 ## Tipos
 
