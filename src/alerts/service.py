@@ -26,7 +26,8 @@ from src.jobs.worker import Handler
 from src.utils.console import log
 
 AlertKind = Literal[
-    "job_dead", "agent_failures", "sync_failures", "watch_failures", "backfill_done"
+    "job_dead", "agent_failures", "sync_failures", "watch_failures", "backfill_done",
+    "ip_blocked", "global_lock", "refresh_reuse", "login_new_ip",
 ]
 AlertOutcome = Literal["sent", "suppressed", "failed"]
 
