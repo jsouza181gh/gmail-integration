@@ -28,12 +28,12 @@ def _utcnow() -> datetime:
 
 
 def _kb_text(verdict: Verdict, action: SuggestedAction, email: Email, comment: str) -> str:
-    who = parseaddr(email.sender or "")[1] or (email.sender or "remetente desconhecido")
+    """KB entries reach the system prompt, so they carry only what the user
+    wrote plus our own vocabulary: never the subject or the agent's reason,
+    which derive from third-party email content (prompt injection)."""
+    who = parseaddr(email.sender or "")[1] or "remetente sem endereço"
     head = "Recusado" if verdict == "reject" else "Aprovado"
-    return (
-        f"{head}: {action.kind} em e-mail de {who} (assunto: {email.subject or '-'}; "
-        f"motivo do agente: {action.reason}). Comentário do usuário: {comment}"
-    )
+    return f"{head}: {action.kind} em e-mail de {who}. Comentário do usuário: {comment}"
 
 
 class ApprovalService:
