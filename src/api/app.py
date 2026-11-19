@@ -18,6 +18,9 @@ from src.api.log_filters import install_access_log_filter
 from src.utils.console import log
 
 
+SYNC_FAILURE_STREAK = 3
+
+
 class PushNotification(BaseModel):
     """Gmail payload carried in a Pub/Sub push message."""
 
@@ -118,13 +121,25 @@ def build_app() -> FastAPI:
     from src.jobs.store import JobStore
     from src.services.sync import SyncCoordinator, sync_inbox
 
+    from src.alerts.service import FailureStreak, build_alert_service
+
     store = Store()
     # The API only ingests and enqueues; the worker process runs the agent.
     jobs = JobStore(store.sf)
+    alerts = build_alert_service(store)
+    syncs = FailureStreak(
+        SYNC_FAILURE_STREAK,
+        lambda n, err: alerts.alert("sync_failures", f"sync falhou {n} vezes seguidas", err),
+    )
 
     def run_sync() -> None:
         # googleapiclient services are not thread-safe: one per sync run.
-        sync_inbox(store, get_gmail_service(), jobs)
+        try:
+            sync_inbox(store, get_gmail_service(), jobs)
+        except Exception as exc:
+            syncs.failure(f"{type(exc).__name__}: {exc}")
+            raise
+        syncs.success()
 
     coordinator = SyncCoordinator(run_sync)
 
@@ -132,7 +147,11 @@ def build_app() -> FastAPI:
         ensure_watch(store, get_gmail_service())
 
     def renew_and_sync() -> None:
-        start_watch()
+        try:
+            start_watch()
+        except Exception as exc:
+            alerts.alert("watch_failures", "renovação do watch do Gmail falhou", f"{exc}")
+            raise
         coordinator.trigger()
 
     return create_app(

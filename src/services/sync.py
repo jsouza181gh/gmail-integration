@@ -138,7 +138,8 @@ def sync_inbox(store: Store, service: Resource, jobs: JobStore) -> SyncResult:
     run_id = store.get_or_create_run(WEBHOOK_QUERY).id
     known = store.known_ids(ids)
     summaries = [_summary_or_none(service, i) for i in ids if i not in known]
-    new_emails = [s for s in summaries if s]
+    # Alerts this system mails to itself must never feed the agent (no loops).
+    new_emails = [s for s in summaries if s and not s.system]
     store.ingest(run_id, [e.id for e in new_emails] + list(known), new_emails)
     store.set_history_id(latest)
 

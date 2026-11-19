@@ -19,6 +19,7 @@ from src.jobs.worker import Handler, Worker
 from src.utils.console import log
 
 HEARTBEAT = Path(os.getenv("WORKER_HEARTBEAT", "/tmp/worker-heartbeat"))
+AGENT_FAILURE_STREAK = 3
 
 
 def main() -> None:
@@ -36,10 +37,18 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
 
     from src.agent.wiring import Agent
+    from src.alerts.service import FailureStreak, build_alert_service
 
     agent = Agent(store, jobs)
+    alerts = build_alert_service(store)
+    runs = FailureStreak(
+        AGENT_FAILURE_STREAK,
+        lambda n, err: alerts.alert(
+            "agent_failures", f"{n} execuções do agente falharam em seguida", err
+        ),
+    )
     handlers: dict[JobKind, Handler] = {
-        "process_email": agent.process_email.handle,
+        "process_email": runs.guard(agent.process_email.handle),
         "execute_action": agent.execute_action.handle,
     }
 
@@ -47,6 +56,11 @@ def main() -> None:
         log(f"job {job.id} ({job.payload.kind}) foi para dead-letter: {error[:200]}")
         if isinstance(job.payload, ExecuteActionJob):
             agent.approvals.mark_failed(job.payload.action_id, f"desistiu após retries: {error}")
+        alerts.alert(
+            "job_dead",
+            f"job {job.id} ({job.payload.kind}) desistiu após {job.attempts} tentativas",
+            f"{job.payload.model_dump_json()}\n\n{error}",
+        )
 
     worker = Worker(
         jobs,

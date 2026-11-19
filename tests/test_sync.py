@@ -30,11 +30,14 @@ def history_response(ids, latest):
     return resp
 
 
-def make_service(history=None, gone=(), **extra):
+def make_service(history=None, gone=(), system=(), **extra):
     def get(userId, id, **kw):
         if id in gone:
             raise http_error(404)
-        return message(id)
+        msg = message(id)
+        if id in system:
+            msg["payload"]["headers"].append({"name": "X-Gmail-Integration", "value": "alert"})
+        return msg
 
     handlers = {
         "history.list": history or (lambda **kw: history_response([], "10")),
@@ -165,3 +168,11 @@ def test_coordinator_survives_run_fn_error():
     coord.trigger()
     coord.trigger()
     assert len(calls) == 2
+
+
+def test_sync_ignores_system_alert_messages(store, jobs):
+    svc = make_service(lambda **kw: history_response(["m1", "alert1"], "20"), system={"alert1"})
+    result = sync_inbox(store, svc, jobs)
+    assert result == SyncResult(ingested=1, enqueued=1)
+    assert queued(jobs) == ["m1"]
+    assert {r.id for r in store.report_rows(run_of(store))} == {"m1"}
