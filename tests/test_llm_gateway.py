@@ -213,7 +213,8 @@ def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     for k in ("GEMINI_MODELS", "LLM_MODE", "FREE_TIER_RPM", "LLM_MAX_ATTEMPTS"):
         monkeypatch.delenv(k, raising=False)
     assert load_llm_config() == LLMConfig(
-        models=("gemini-3.5-flash-lite",), mode="free", rpm=15, max_attempts=8
+        models=("gemini-3.5-flash-lite", "gemini-3.1-flash-lite"), mode="free", rpm=15,
+        max_attempts=8,
     )
 
 
