@@ -10,6 +10,7 @@ import hmac
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from pydantic import BaseModel, ConfigDict
@@ -18,6 +19,7 @@ from src.api.deps import ApiDeps
 from src.api.log_filters import install_access_log_filter
 from src.api.pubsub_auth import PubSubVerifier
 from src.api.security import RateLimiter, security_middleware
+from src.api.static import mount_web
 from src.utils.console import log
 
 
@@ -73,9 +75,11 @@ def create_app(
     retry_s: float = 3600,
     api: ApiDeps | None = None,
     pubsub: PubSubVerifier | None = None,
+    web_dist: Path | None = None,
 ) -> FastAPI:
     """`api` enables the authenticated panel API under /api; without it only
-    the webhook and /healthz exist (e.g. before the auth secrets are set)."""
+    the webhook and /healthz exist (e.g. before the auth secrets are set).
+    `web_dist` (the built panel) is served at / only together with `api`."""
     install_access_log_filter()
 
     @asynccontextmanager
@@ -130,6 +134,8 @@ def create_app(
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    if api is not None:
+        mount_web(app, web_dist)  # last: the catch-all must not shadow any route
     return app
 
 
@@ -195,4 +201,5 @@ def build_app() -> FastAPI:
         on_startup=start_watch,
         renew=renew_and_sync,
         api=api,
+        web_dist=Path(os.getenv("WEB_DIST", "web/dist")),
     )

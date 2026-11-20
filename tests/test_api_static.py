@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.api.app import create_app
+from src.api.deps import ApiDeps
 from tests.api_fakes import ORIGIN, Api
 
 
@@ -17,8 +18,8 @@ def dist(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def make_client(sf: sessionmaker[Session], web_dist: Path | None) -> TestClient:
-    deps = Api(sf).deps
+def make_client(sf: sessionmaker[Session], web_dist: Path | None, deps: ApiDeps | None = None) -> TestClient:
+    deps = deps or Api(sf).deps
     app = create_app(trigger=lambda: None, token=None, api=deps, web_dist=web_dist)
     return TestClient(app, base_url="https://testserver", headers={"Origin": ORIGIN})
 
@@ -76,8 +77,9 @@ def test_path_traversal_never_leaves_dist(
 def test_nothing_is_mounted_without_a_build(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
+    deps = Api(session_factory).deps
     for dist in (empty, None):
-        client = make_client(session_factory, dist)
+        client = make_client(session_factory, dist, deps)
         assert client.get("/").status_code == 404
 
 
