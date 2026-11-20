@@ -2,7 +2,7 @@ import base64
 
 from src.agent.types import MailQuery
 from src.gmail.reader import BODY_MAX_CHARS, GmailReader
-from tests.fakes import FakeService
+from tests.fakes import FakeService, http_error
 
 
 def _b64(text: str) -> str:
@@ -103,3 +103,10 @@ def test_reader_lists_labels() -> None:
     svc = FakeService(labels__list=lambda **kw: {"labels": [{"id": "L1", "name": "IA/Promoções", "type": "user"}]})
     (label,) = _reader(svc).list_labels()
     assert (label.id, label.name, label.type) == ("L1", "IA/Promoções", "user")
+
+
+def test_item_404_returns_none() -> None:
+    def get(**kw: object) -> dict[str, object]:
+        raise http_error(404)
+
+    assert _reader(FakeService(messages__get=get)).item("gone") is None

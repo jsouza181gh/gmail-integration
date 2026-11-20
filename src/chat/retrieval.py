@@ -9,9 +9,11 @@ from collections.abc import Sequence
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.agent.ports import MailReader
 from src.agent.types import DocHit, MailHit
 from src.db.models import Attachment, Email
 from src.db.rows import EmailRow
+from src.gmail.messages import parse_date
 from src.indexing.store import IndexStore, SearchHit
 from src.llm.errors import LLMError
 from src.llm.types import CallContext, EmbedInput, Embedder
@@ -80,8 +82,9 @@ class DbRetriever:
 
 
 class DbEmailLookup:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: sessionmaker[Session], mail: MailReader) -> None:
         self.sf = session_factory
+        self.mail = mail
 
     def email(self, email_id: str) -> EmailRow | None:
         with self.sf() as s:
@@ -92,6 +95,20 @@ class DbEmailLookup:
         with self.sf() as s:
             row = s.get(Email, email_id)
             return row.body if row is not None and row.body else None
+
+    def ensure(self, email_id: str) -> EmailRow | None:
+        found = self.email(email_id)
+        if found is not None:
+            return found
+        item = self.mail.item(email_id)
+        if item is None:
+            return None
+        with self.sf.begin() as s:
+            if s.get(Email, item.id) is None:
+                s.add(Email(id=item.id, sender=item.sender, subject=item.subject,
+                            date=item.date, snippet=item.snippet,
+                            received_at=parse_date(item.date), attempts=0, source="chat"))
+        return self.email(item.id)
 
 
 class DbDocCatalog:

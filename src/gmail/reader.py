@@ -10,6 +10,7 @@ from collections.abc import Callable
 from html.parser import HTMLParser
 
 from googleapiclient.discovery import Resource
+from googleapiclient.errors import HttpError
 from pydantic import BaseModel
 
 from src.agent.types import LabelInfo, MailItem, MailPage, MailQuery
@@ -148,6 +149,15 @@ class GmailReader:
             userId=USER_ID, id=email_id, format="full"
         ).execute(num_retries=5)
         return extract_body(_Message.model_validate(raw).payload)
+
+    def item(self, email_id: str) -> MailItem | None:
+        """Metadata of one message; None when Gmail no longer has it."""
+        try:
+            return self._item(self._service(), email_id)
+        except HttpError as e:
+            if e.resp.status == 404:
+                return None
+            raise
 
     def _item(self, service: Resource, message_id: str) -> MailItem:
         raw = service.users().messages().get(

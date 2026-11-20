@@ -122,9 +122,9 @@ def read_email(
         email_id: Id from search_mail or list_emails.
     """
     ctx = runtime.context
-    email = ctx.lookup.email(email_id)
+    email = ctx.lookup.ensure(email_id)
     if email is None:
-        raise ValueError(f"e-mail não encontrado: {email_id}")
+        raise ValueError(f"esse e-mail não existe mais no Gmail: {email_id}")
     body = ctx.lookup.body(email_id)
     if body is None:
         body = ctx.mail.get_body(email_id)

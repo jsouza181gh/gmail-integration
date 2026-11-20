@@ -18,6 +18,7 @@ from src.db.models import (
     AgentConfig,
     Attachment,
     AutomationRule,
+    Email,
     KbEntry,
     SuggestedAction,
     ToolPolicy,
@@ -25,7 +26,7 @@ from src.db.models import (
 from src.jobs.store import JobStore
 from src.llm.types import JsonArgs, ToolCallRequest
 from tests.agent_fakes import FakeTaxonomy, make_ctx
-from tests.chat_fakes import add_email
+from tests.chat_fakes import SpamMail, add_email, spam_item
 
 
 def _run(trail: Trail, name: str, args: JsonArgs | None, deps: dict[str, object]) -> ToolExecution:
@@ -50,6 +51,7 @@ class ChatWorld:
         conv = self.store.create_conversation()
         self.message_id = self.store.start_turn(conv.id, text="oi").assistant.id
         self.trail = Trail(sf)
+        self.mail = SpamMail([spam_item("sp1"), spam_item("sp2", "Alerta do Google - Petr4")])
         self.deps: dict[str, object] = {
             "chat": ChatScope(conversation_id=conv.id, message_id=self.message_id,
                               channel="audio"),
@@ -57,7 +59,8 @@ class ChatWorld:
             "rules": self.rules,
             "actions": self.actions,
             "pending": self.approvals,
-            "lookup": DbEmailLookup(sf),
+            "lookup": DbEmailLookup(sf, self.mail),
+            "mail": self.mail,
             "docs": DbDocCatalog(sf),
             "taxonomy": FakeTaxonomy(),
         }
@@ -208,3 +211,33 @@ def test_chat_registry_offers_only_chat_tools() -> None:
     for name in ("classify_email", "get_email_body", "sender_history", "propose_action"):
         entry = reg.get(name)
         assert entry is not None and entry.contexts == frozenset({"webhook"})
+
+
+def test_ensure_fetches_and_stores_unknown_id(w: ChatWorld) -> None:
+    row = DbEmailLookup(w.sf, w.mail).ensure("sp1")
+    assert row is not None and row.source == "chat"
+    assert row.sender == "Google Alerts <googlealerts-noreply@google.com>"
+    with w.sf() as s:
+        stored = s.get(Email, "sp1")
+        assert stored is not None and stored.source == "chat" and stored.received_at is not None
+
+
+def test_ensure_unknown_in_gmail_returns_none(w: ChatWorld) -> None:
+    assert DbEmailLookup(w.sf, w.mail).ensure("gone") is None
+
+
+def test_show_emails_accepts_spam_ids(w: ChatWorld) -> None:
+    res = w.run("show_emails", {"email_ids": ["sp1", "sp2"]})
+    assert res.ok and "2 e-mail(s)" in res.message.content
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert [i.email_id for i in card.items] == ["sp1", "sp2"]
+
+
+def test_show_emails_gone_id_message(w: ChatWorld) -> None:
+    res = w.run("show_emails", {"email_ids": ["gone"]})
+    assert not res.ok and "não existe mais no Gmail" in res.message.content
+
+
+def test_read_email_of_spam_id_reads_gmail_body(w: ChatWorld) -> None:
+    res = w.run("read_email", {"email_id": "sp1"})
+    assert res.ok and "corpo de sp1" in res.message.content

@@ -52,7 +52,7 @@ class Agent:
         self.approvals = ApprovalService(sf, jobs)
         self.chat_store = ChatStore(sf)
         retriever = DbRetriever(IndexStore(sf), gateway)
-        lookup = DbEmailLookup(sf)
+        lookup = DbEmailLookup(sf, mail)
         docs = DbDocCatalog(sf)
         rules = RuleAdmin(sf)
 

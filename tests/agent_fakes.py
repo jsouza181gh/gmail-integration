@@ -15,6 +15,7 @@ from src.agent.types import (
     DocHit,
     LabelInfo,
     MailHit,
+    MailItem,
     MailPage,
     MailQuery,
     PolicyDecision,
@@ -91,6 +92,9 @@ class NoMail:
     def list_messages(self, query: MailQuery) -> MailPage:
         raise AssertionError("mail not expected")
 
+    def item(self, email_id: str) -> MailItem | None:
+        raise AssertionError("mail not expected")
+
     def get_body(self, email_id: str) -> str:
         raise AssertionError("mail not expected")
 
@@ -148,6 +152,9 @@ class NoLookup:
         raise AssertionError("lookup not expected")
 
     def body(self, email_id: str) -> str | None:
+        raise AssertionError("lookup not expected")
+
+    def ensure(self, email_id: str) -> EmailRow | None:
         raise AssertionError("lookup not expected")
 
 

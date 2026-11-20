@@ -42,7 +42,7 @@ class MessageSummary(Schema):
     system: bool = False  # an alert sent by this system: never ingested
 
 
-def _parse_date(value: str | None) -> datetime | None:
+def parse_date(value: str | None) -> datetime | None:
     """RFC 2822 Date header -> aware UTC datetime; None when unparseable."""
     if not value:
         return None
@@ -64,7 +64,7 @@ def summary_from(message_id: str, snippet: str | None, headers: dict[str, str]) 
         subject=(headers.get("Subject") or "")[:100],
         date=(headers.get("Date") or "")[:25],
         snippet=" ".join(clean.split())[:SNIPPET_MAX_CHARS],
-        received_at=_parse_date(headers.get("Date")),
+        received_at=parse_date(headers.get("Date")),
         system=SYSTEM_HEADER in headers,
     )
 

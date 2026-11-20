@@ -96,12 +96,12 @@ def show_emails(
         email_ids: Up to 10 ids from search_mail or list_emails.
     """
     ctx = runtime.context
-    found = [i for i in dict.fromkeys(email_ids[:SHOW_EMAILS_MAX]) if ctx.lookup.email(i)]
+    found = [i for i in dict.fromkeys(email_ids[:SHOW_EMAILS_MAX]) if ctx.lookup.ensure(i)]
     missing = [i for i in email_ids[:SHOW_EMAILS_MAX] if i not in found]
     if not found:
-        raise ValueError("nenhum desses e-mails está guardado")
+        raise ValueError(f"não existe mais no Gmail: {', '.join(missing)}")
     card = _card(ctx, EmailsDraft(email_ids=tuple(found)))
-    note = f"; não encontrados: {', '.join(missing)}" if missing else ""
+    note = f"; não existe mais no Gmail: {', '.join(missing)}" if missing else ""
     return f"cartão #{card}: {len(found)} e-mail(s) mostrado(s){note}", None
 
 

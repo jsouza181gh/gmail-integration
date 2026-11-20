@@ -14,6 +14,7 @@ from src.agent.types import (
     DocHit,
     LabelInfo,
     MailHit,
+    MailItem,
     MailPage,
     MailQuery,
     PolicyDecision,
@@ -32,6 +33,8 @@ from src.llm.types import CallContext
 @runtime_checkable
 class MailReader(Protocol):
     def list_messages(self, query: MailQuery) -> MailPage: ...
+
+    def item(self, email_id: str) -> MailItem | None: ...
 
     def get_body(self, email_id: str) -> str: ...
 
@@ -97,6 +100,12 @@ class EmailLookup(Protocol):
     def email(self, email_id: str) -> EmailRow | None: ...
 
     def body(self, email_id: str) -> str | None: ...
+
+    def ensure(self, email_id: str) -> EmailRow | None:
+        """The stored email, fetching it from Gmail (spam, trash, old mail)
+        and storing it as source='chat' when unknown; None when Gmail no
+        longer has it."""
+        ...
 
 
 @runtime_checkable
