@@ -306,3 +306,24 @@ def test_list_emails_records_refs_only_in_chat(w: ChatWorld) -> None:
 def test_show_and_search_record_refs(w: ChatWorld) -> None:
     assert w.run("show_emails", {"email_ids": ["e1", "sp1"]}).ok
     assert _refs(w) == ["e1", "sp1"]
+
+
+def test_propose_rule_unknown_sender_suggests_close_match(w: ChatWorld) -> None:
+    add_email(w.sf, "ga", sender="Google Alerts <googlealerts-noreply@google.com>")
+    res = w.run("propose_rule", {"name": "alertas", "action": "trash",
+                                 "sender_address": "google-alerts-noreply@google.com"})
+    assert not res.ok
+    assert "nenhum e-mail de google-alerts-noreply@google.com" in res.message.content
+    assert "parecido: googlealerts-noreply@google.com" in res.message.content
+    ok = w.run("propose_rule", {"name": "alertas", "action": "trash",
+                                "sender_address": "googlealerts-noreply@google.com"})
+    assert ok.ok
+
+
+def test_chat_prompt_v2_mentions_batch_tool_only() -> None:
+    from src.agent.prompts import CHAT_PROMPT_V2
+
+    assert "propose_email_actions" in CHAT_PROMPT_V2
+    assert "propose_email_action " not in CHAT_PROMPT_V2
+    assert "propose_email_action(" not in CHAT_PROMPT_V2
+    assert "[evento]" in CHAT_PROMPT_V2

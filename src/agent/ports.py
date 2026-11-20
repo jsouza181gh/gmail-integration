@@ -142,6 +142,8 @@ class RuleReader(Protocol):
 
     def get(self, rule_id: int) -> RuleRow | None: ...
 
+    def known_senders(self, address: str) -> tuple[int, tuple[str, ...]]: ...
+
 
 @runtime_checkable
 class RefSink(Protocol):

@@ -304,6 +304,13 @@ def propose_rule(
     )
     if not cond.has_condition():
         raise ValueError("a regra precisa de remetente, domínio, categoria ou assunto")
+    if cond.sender_address:
+        count, close = ctx.rules.known_senders(cond.sender_address)
+        if not count:
+            hint = f"; parecido: {', '.join(close)}" if close else ""
+            raise ValueError(
+                f"nenhum e-mail de {cond.sender_address}; confira o endereço{hint}"
+            )
     _, affected = ctx.rules.existing(cond, 0)
     card = _card(ctx, RuleDraft(
         name=name.strip()[:120] or "regra do chat",

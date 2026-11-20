@@ -64,6 +64,9 @@ class EmptyRules:
     def get(self, rule_id: int) -> RuleRow | None:
         return None
 
+    def known_senders(self, address: str) -> tuple[int, tuple[str, ...]]:
+        return 1, ()
+
 
 class SpyStore(ChatStore):
     def __init__(self, sf: sessionmaker[Session]) -> None:

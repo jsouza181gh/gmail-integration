@@ -194,6 +194,9 @@ class NoRules:
     def get(self, rule_id: int) -> RuleRow | None:
         raise AssertionError("rules not expected")
 
+    def known_senders(self, address: str) -> tuple[int, tuple[str, ...]]:
+        raise AssertionError("rules not expected")
+
 
 class NoCards:
     def add_card(self, message_id: int, channel: ChatChannel, draft: CardDraft) -> int:

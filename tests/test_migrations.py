@@ -85,8 +85,10 @@ def test_seed_tool_policies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_seed_agent_config_v1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, url = _upgraded(tmp_path, monkeypatch)
     with create_engine(url).connect() as c:
-        rows = c.execute(text("select version, active, max_turns from agent_configs")).all()
-    assert [tuple(r) for r in rows] == [(1, True, 4)]
+        rows = c.execute(
+            text("select version, active, max_turns from agent_configs order by version")
+        ).all()
+    assert [tuple(r) for r in rows] == [(1, False, 4), (2, True, 4)]
 
 
 def test_chat_columns_and_seeded_chat_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,3 +116,20 @@ def test_migration_0015_upgrade_downgrade(tmp_path: Path, monkeypatch: pytest.Mo
     insp = inspect(create_engine(url))
     assert "chat_message_refs" not in insp.get_table_names()
     assert "source" not in {c["name"] for c in insp.get_columns("emails")}
+
+
+def test_migration_0016_activates_v2_and_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.agent.prompts import CHAT_PROMPT_V2
+
+    cfg, url = _upgraded(tmp_path, monkeypatch)
+    with create_engine(url).connect() as c:
+        active = c.execute(text("select version, chat_prompt, decide_prompt from agent_configs"
+                                " where active")).one()
+        v1_decide = c.execute(text("select decide_prompt from agent_configs where version = 1")).scalar()
+    assert active[0] == 2 and active[1] == CHAT_PROMPT_V2 and active[2] == v1_decide
+    command.downgrade(cfg, "0015")
+    with create_engine(url).connect() as c:
+        rows = c.execute(text("select version, active from agent_configs")).all()
+    assert [tuple(r) for r in rows] == [(1, True)]
