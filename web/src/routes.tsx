@@ -7,17 +7,8 @@ import Documentos from './pages/Documentos'
 import Execucoes from './pages/Execucoes'
 import Login from './pages/Login'
 import Relevantes from './pages/Relevantes'
+import Seguranca from './pages/Seguranca'
 import { RequireAuth } from './shell/RequireAuth'
-import { Page, PageHead } from './ui/Page'
-
-// Replaced by the real page in the task that builds it.
-function Soon({ title }: { title: string }) {
-  return (
-    <Page>
-      <PageHead title={title} />
-    </Page>
-  )
-}
 
 export function AppRoutes() {
   return (
@@ -32,7 +23,7 @@ export function AppRoutes() {
         <Route path="chat" element={<Chat />} />
         <Route path="agente" element={<Agente />} />
         <Route path="execucoes" element={<Execucoes />} />
-        <Route path="seguranca" element={<Soon title="Segurança" />} />
+        <Route path="seguranca" element={<Seguranca />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
