@@ -18,3 +18,5 @@ backups
 .claude
 .github
 *.csv
+web/node_modules
+web/dist

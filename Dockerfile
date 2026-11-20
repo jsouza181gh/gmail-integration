@@ -1,6 +1,13 @@
+FROM node:lts-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 WEB_DIST=/app/web/dist
 
 WORKDIR /app
 
@@ -8,6 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+COPY --from=web /web/dist /app/web/dist
 
 RUN useradd --create-home --uid 1000 app \
     && mkdir -p /app/secrets \

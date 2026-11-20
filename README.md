@@ -146,7 +146,7 @@ docker compose exec worker python -m src.cli.enqueue --days 7                   
 
 ## API do painel (autenticada)
 
-Tudo sob `/api`, mesma origem do front (nginx serve o front em `/` e repassa `/api` e `/webhooks`), sem CORS. A API só lê, registra decisões e enfileira jobs: não chama LLM, e do Gmail só lê (download de anexo, total da caixa).
+Tudo sob `/api`, mesma origem do front (a própria API serve o painel em `/`; o nginx só repassa tudo para ela), sem CORS. A API só lê, registra decisões e enfileira jobs: não chama LLM, e do Gmail só lê (download de anexo, total da caixa).
 
 - **Login:** senha → TOTP (ou recovery code). Usuário único, criado na VPS. Access JWT de 10 min e refresh de 14 dias (rotacionado a cada uso; reuso de um refresh antigo derruba a família inteira e manda alerta) em cookies `HttpOnly; Secure; SameSite=Strict`.
 - **Bloqueios:** 3 falhas de um IP em 24 h → IP bloqueado; falhas de 3 IPs em 24 h → login fechado para todos. Só a CLI desbloqueia.
@@ -170,6 +170,29 @@ location /api/ {
 Desbloqueio: `docker compose exec api python -m src.cli.unlock --list | --ip <IP> | --global`.
 
 **Webhook com OIDC (recomendado):** na assinatura push do Pub/Sub, marque *Enable authentication*, escolha uma service account e use como audience `https://<SEU_DOMINIO>/webhooks/gmail`. No `.env`: `PUBSUB_AUDIENCE` (a mesma URL) e `PUBSUB_SERVICE_ACCOUNT` (o e-mail da service account). Com os dois definidos, o `?token=` deixa de valer.
+
+## Painel web
+
+Vite + React + TypeScript em `web/`, fiel ao design "Inbox Agent" (uma cor só, brasa sobre quase-preto). Toda resposta da API passa por schema zod; `any` é proibido (oxlint). O build (`npm run build`) vai para a imagem Docker (`/app/web/dist`, variável `WEB_DIST`) e a API serve o painel em `/` com fallback de SPA; `/api`, `/webhooks` e `/healthz` continuam vindo antes.
+
+```bash
+cd web && npm ci
+APP_ORIGIN=https://<SEU_DOMINIO> npm run dev   # proxy de /api para 127.0.0.1:8000, reescrevendo o Origin
+npm test && npm run lint && npm run typecheck && npm run build
+```
+
+- Em dev a API precisa estar de pé (`uvicorn src.api.app:build_app --factory`) com `APP_ORIGIN` igual ao que o proxy envia; o cookie `Secure` funciona em `http://localhost`.
+- Aprovar/recusar espera 5 s (botão "Desfazer", tecla `Z`) antes de ir para a API; sair da tela envia na hora.
+
+Nginx do host, no mesmo `server` HTTPS (passo manual, depois do deploy; com ele `/api/` e `/webhooks/gmail` já cobertos acima):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
 
 ## Backfill e documentos
 
