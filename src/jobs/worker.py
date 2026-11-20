@@ -43,7 +43,12 @@ class Worker:
         heartbeat: Path | None,
         stale_after: timedelta = timedelta(minutes=15),
         clock: Callable[[], float] = time.monotonic,
+        kinds: frozenset[JobKind] | None = None,
+        exclude: frozenset[JobKind] = frozenset(),
+        housekeeping: bool = True,
     ) -> None:
+        """`kinds`/`exclude` pick this lane's jobs; only the housekeeping lane
+        returns orphaned/stale jobs to the queue (one per process)."""
         self.store = store
         self.handlers = handlers
         self.on_dead = on_dead
@@ -53,6 +58,9 @@ class Worker:
         self.heartbeat = heartbeat
         self.stale_after = stale_after
         self._clock = clock
+        self.kinds = kinds
+        self.exclude = exclude
+        self.housekeeping = housekeeping
 
     def _beat(self) -> None:
         if self.heartbeat is not None:
@@ -60,7 +68,7 @@ class Worker:
 
     def run_once(self) -> bool:
         """Process one job; False when the queue had nothing ready."""
-        job = self.store.claim(self.worker_id)
+        job = self.store.claim(self.worker_id, kinds=self.kinds, exclude=self.exclude)
         if job is None:
             return False
         kind = job.payload.kind
@@ -89,12 +97,14 @@ class Worker:
     def run_forever(self, stop: Callable[[], bool] = lambda: False) -> None:
         last_stale_check: float | None = None
         log(f"worker {self.worker_id} no ar")
-        orphans = self.store.requeue_orphans()
-        if orphans:
-            log(f"{orphans} job(s) interrompido(s) voltaram para a fila")
+        if self.housekeeping:
+            orphans = self.store.requeue_orphans()
+            if orphans:
+                log(f"{orphans} job(s) interrompido(s) voltaram para a fila")
         while not stop():
             now = self._clock()
-            if last_stale_check is None or now - last_stale_check >= STALE_CHECK_EVERY_S:
+            due = last_stale_check is None or now - last_stale_check >= STALE_CHECK_EVERY_S
+            if self.housekeeping and due:
                 n = self.store.requeue_stale(self.stale_after)
                 if n:
                     log(f"{n} job(s) travado(s) voltaram para a fila")

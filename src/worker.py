@@ -6,6 +6,7 @@ process (free-mode pacing lives in it).
 import os
 import signal
 import socket
+import threading
 from datetime import timedelta
 from pathlib import Path
 from types import FrameType
@@ -20,6 +21,7 @@ from src.utils.console import log
 
 HEARTBEAT = Path(os.getenv("WORKER_HEARTBEAT", "/tmp/worker-heartbeat"))
 AGENT_FAILURE_STREAK = 3
+CHAT_KINDS: frozenset[JobKind] = frozenset({"chat_turn"})
 
 
 def main() -> None:
@@ -75,16 +77,36 @@ def main() -> None:
             f"{job.payload.model_dump_json()}\n\n{error}",
         )
 
+    worker_id = f"{socket.gethostname()}:{os.getpid()}"
+    # Chat has its own lane so a turn never waits behind backfill/indexing;
+    # both lanes share the gateway (and so the free-tier pacing).
+    chat_lane = Worker(
+        jobs,
+        handlers,
+        on_dead=on_dead,
+        poll_s=float(os.getenv("CHAT_POLL_S", "1")),
+        worker_id=f"{worker_id}:chat",
+        heartbeat=None,
+        kinds=CHAT_KINDS,
+        housekeeping=False,
+    )
     worker = Worker(
         jobs,
         handlers,
         on_dead=on_dead,
         poll_s=float(os.getenv("WORKER_POLL_S", "5")),
-        worker_id=f"{socket.gethostname()}:{os.getpid()}",
+        worker_id=worker_id,
         heartbeat=HEARTBEAT,
         stale_after=timedelta(minutes=int(os.getenv("WORKER_STALE_MIN", "15"))),
+        exclude=CHAT_KINDS,
     )
+    lane = threading.Thread(
+        target=chat_lane.run_forever, kwargs={"stop": lambda: stopping}, name="chat-lane",
+        daemon=True,
+    )
+    lane.start()
     worker.run_forever(stop=lambda: stopping)
+    lane.join(timeout=60)
 
 
 if __name__ == "__main__":

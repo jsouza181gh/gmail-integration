@@ -16,12 +16,14 @@ from src.jobs.types import (
     PRIORITY,
     AnyJob,
     BackfillPageJob,
+    ChatTurnJob,
     ClaimedJob,
     DeadJob,
     ExecuteActionJob,
     IndexAttachmentJob,
     IndexEmailJob,
     JobCounts,
+    JobKind,
     ProcessEmailJob,
     idempotency_key,
 )
@@ -36,6 +38,8 @@ def _utcnow() -> datetime:
 
 
 def _payload(job: Job) -> AnyJob:
+    if job.kind == "chat_turn" and job.chat_message_id is not None:
+        return ChatTurnJob(message_id=job.chat_message_id)
     if job.kind == "process_email" and job.email_id is not None:
         return ProcessEmailJob(email_id=job.email_id)
     if job.kind == "execute_action" and job.action_id is not None:
@@ -53,8 +57,11 @@ def _columns(payload: AnyJob) -> dict[str, str | int | None]:
     """The typed payload columns of one job row."""
     cols: dict[str, str | int | None] = {
         "email_id": None, "action_id": None, "attachment_id": None, "run_id": None, "page_no": None,
+        "chat_message_id": None,
     }
     match payload:
+        case ChatTurnJob(message_id=m):
+            cols["chat_message_id"] = m
         case ProcessEmailJob(email_id=e) | IndexEmailJob(email_id=e):
             cols["email_id"] = e
         case ExecuteActionJob(action_id=a):
@@ -100,7 +107,14 @@ class JobStore:
             stmt = insert(Job).values(row).on_conflict_do_nothing().returning(Job.id)
             return s.execute(stmt).scalar_one_or_none() is not None
 
-    def claim(self, worker_id: str) -> ClaimedJob | None:
+    def claim(
+        self,
+        worker_id: str,
+        *,
+        kinds: frozenset[JobKind] | None = None,
+        exclude: frozenset[JobKind] = frozenset(),
+    ) -> ClaimedJob | None:
+        """Next ready job; `kinds`/`exclude` split the queue between worker lanes."""
         now = self._now()
         with self.sf.begin() as s:
             q = (
@@ -109,6 +123,10 @@ class JobStore:
                 .order_by(Job.priority.desc(), Job.id)
                 .limit(1)
             )
+            if kinds is not None:
+                q = q.where(Job.kind.in_(sorted(kinds)))
+            if exclude:
+                q = q.where(Job.kind.not_in(sorted(exclude)))
             if s.get_bind().dialect.name == "postgresql":
                 q = q.with_for_update(skip_locked=True)
             job = s.scalars(q).first()
