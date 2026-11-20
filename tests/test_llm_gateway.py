@@ -476,3 +476,56 @@ def test_mode_source_switches_pacing_at_runtime() -> None:
     mode[0] = "free"
     g.generate_structured(P, Out)
     assert clock.slept == [1.0]
+
+
+def test_prompt_attempts_override() -> None:
+    rec = ListRecorder()
+    chat = FakeChat([RuntimeError("503")] * 5 + [Out(x=1)])
+    p = P.model_copy(update={"attempts": 3})
+    with pytest.raises(LLMExhaustedError):
+        gw(max_attempts=8, chats={"m1": chat}, recorder=rec).generate_structured(p, Out)
+    assert len(rec.items) == 3
+
+
+def test_audio_part_becomes_audio_block() -> None:
+    from src.llm.gateway import _to_langchain
+    from src.llm.types import BinaryPart
+
+    msg = ChatMessage(role="human", content="transcreva",
+                      parts=(BinaryPart(mime_type="audio/wav", data=b"RIFF"),))
+    lc = _to_langchain(msg)
+    assert isinstance(lc.content, list)
+    block = lc.content[1]
+    assert isinstance(block, dict) and block["type"] == "audio"
+    assert block["mime_type"] == "audio/wav" and block["base64"] == "UklGRg=="
+
+
+def test_pace_reserves_slots_across_threads() -> None:
+    import threading
+
+    sleeps: list[float] = []
+    g = LLMGateway(["m1"], mode="free", rpm=15, chat_factory=lambda m: FakeChat([]),
+                   sleep=sleeps.append, clock=lambda: 0.0)
+    for _ in range(3):
+        t = threading.Thread(target=g._pace)
+        t.start()
+        t.join()
+    assert sleeps == [4.0, 8.0]
+
+
+def test_chat_clients_are_per_thread() -> None:
+    import threading
+
+    made: list[str] = []
+
+    def factory(model: str) -> FakeChat:
+        made.append(model)
+        return FakeChat([])
+
+    g = LLMGateway(["m1"], chat_factory=factory)
+    g._chat("m1")
+    g._chat("m1")
+    t = threading.Thread(target=lambda: g._chat("m1"))
+    t.start()
+    t.join()
+    assert made == ["m1", "m1"]
