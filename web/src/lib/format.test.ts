@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'vitest'
-import { dueLabel, formatDate, formatMoney, formatWhen, senderAddress, senderName, subjectOf } from './format'
+import {
+  dueLabel,
+  formatDate,
+  formatMoney,
+  formatPercent,
+  formatWhen,
+  longDate,
+  senderAddress,
+  senderName,
+  subjectOf,
+} from './format'
 
 // Thursday, local time.
 const now = new Date(2026, 10, 19, 12, 0, 0)
@@ -53,4 +63,14 @@ describe('sender and subject', () => {
     expect(senderAddress('Light <No-Reply@Light.com.br>')).toBe('no-reply@light.com.br')
     expect(senderAddress(null)).toBeNull()
   })
+})
+
+describe('formatPercent and longDate', () => {
+  test('percent_uses_comma_and_one_decimal', () => {
+    expect(formatPercent(1.6)).toBe('1,6%')
+    expect(formatPercent(23.4)).toBe('23,4%')
+    expect(formatPercent(100)).toBe('100%')
+    expect(formatPercent(null)).toBe('—')
+  })
+  test('long_date_in_portuguese', () => expect(longDate(now)).toBe('Quinta, 19 de novembro'))
 })

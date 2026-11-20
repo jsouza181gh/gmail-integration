@@ -80,3 +80,18 @@ export function senderAddress(sender: string | null): string | null {
   const m = NAMED.exec(raw)
   return (m?.[2] ?? raw).trim().toLowerCase()
 }
+
+export function formatPercent(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return DASH
+  return `${value.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`
+}
+
+const WEEKDAYS_LONG = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+const MONTHS = [
+  'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+]
+
+export function longDate(d: Date): string {
+  return `${WEEKDAYS_LONG[d.getDay()]}, ${d.getDate()} de ${MONTHS[d.getMonth()]}`
+}
