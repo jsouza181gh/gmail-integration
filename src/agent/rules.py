@@ -183,6 +183,9 @@ class RuleAdmin:
             s.flush()
             return rule.id
 
+    def existing(self, cond: RuleCondition, limit: int) -> tuple[list[str], int]:
+        return RuleEngine(self.sf).existing(cond, limit)
+
     def list(self) -> tuple[RuleRow, ...]:
         with self.sf() as s:
             rows = s.scalars(select(AutomationRule).order_by(AutomationRule.id))

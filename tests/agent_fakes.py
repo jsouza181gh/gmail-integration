@@ -7,9 +7,14 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from src.agent.context import AgentContext, LLMDeps, RunScope
+from src.agent.rules import RuleCondition
 from src.agent.types import (
     ActionKind,
+    CardDraft,
+    ChatChannel,
+    DocHit,
     LabelInfo,
+    MailHit,
     MailPage,
     MailQuery,
     PolicyDecision,
@@ -22,8 +27,8 @@ from src.agent.types import (
 from src.classification.classifier import BatchResult, Item
 from src.classification.seed import V1
 from src.classification.taxonomy import Taxonomy
-from src.db.rows import EmailRow
-from src.llm.types import Check, AssistantTurn, Prompt, StructuredResult, TokenUsage, ToolCallRequest
+from src.db.rows import EmailRow, PendingActionRow, RuleRow
+from src.llm.types import CallContext, Check, AssistantTurn, Prompt, StructuredResult, TokenUsage, ToolCallRequest
 
 
 def make_email(email_id: str = "a", **over: object) -> EmailRow:
@@ -133,6 +138,57 @@ class NoKb:
         return ()
 
 
+class NoRetriever:
+    def search(self, query: str, k: int, call: CallContext) -> tuple[MailHit, ...]:
+        raise AssertionError("search not expected")
+
+
+class NoLookup:
+    def email(self, email_id: str) -> EmailRow | None:
+        raise AssertionError("lookup not expected")
+
+    def body(self, email_id: str) -> str | None:
+        raise AssertionError("lookup not expected")
+
+
+class NoDocs:
+    def find(
+        self, doc_class: str | None, doc_type: str | None, text: str | None, limit: int
+    ) -> tuple[DocHit, ...]:
+        raise AssertionError("documents not expected")
+
+    def get(self, ids: Sequence[int]) -> tuple[DocHit, ...]:
+        raise AssertionError("documents not expected")
+
+
+class NoPending:
+    def pending(
+        self,
+        *,
+        ids: Sequence[int] = (),
+        sender: str | None = None,
+        rule_id: int | None = None,
+        kind: str | None = None,
+    ) -> tuple[PendingActionRow, ...]:
+        raise AssertionError("pending not expected")
+
+
+class NoRules:
+    def existing(self, cond: RuleCondition, limit: int) -> tuple[list[str], int]:
+        raise AssertionError("rules not expected")
+
+    def list(self) -> tuple[RuleRow, ...]:
+        raise AssertionError("rules not expected")
+
+    def get(self, rule_id: int) -> RuleRow | None:
+        raise AssertionError("rules not expected")
+
+
+class NoCards:
+    def add_card(self, message_id: int, channel: ChatChannel, draft: CardDraft) -> int:
+        raise AssertionError("cards not expected")
+
+
 def make_ctx(
     *,
     run_id: int,
@@ -154,6 +210,12 @@ def make_ctx(
         "actions": NoActions(),
         "policy": SuggestAll(),
         "kb": NoKb(),
+        "retriever": NoRetriever(),
+        "lookup": NoLookup(),
+        "docs": NoDocs(),
+        "pending": NoPending(),
+        "rules": NoRules(),
+        "cards": NoCards(),
     }
     fields.update(extra or {})
     fields.update(deps)

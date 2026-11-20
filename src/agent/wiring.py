@@ -16,15 +16,18 @@ from src.agent.flows.process_email import ProcessEmailFlow
 from src.agent.kb import DbKb
 from src.agent.loop import AgentLoop
 from src.agent.policy import PolicyResolver
-from src.agent.rules import RuleEngine
+from src.agent.rules import RuleAdmin, RuleEngine
 from src.agent.sender_history import DbSenderHistory
 from src.agent.tools import build_registry
 from src.agent.trail import Trail
+from src.chat.retrieval import DbDocCatalog, DbEmailLookup, DbRetriever
+from src.chat.store import ChatStore
 from src.db.store import Store
 from src.gmail.actions import GmailActions
 from src.gmail.client import get_gmail_service, has_scope
 from src.gmail.labels import GmailLabeler
 from src.gmail.reader import GmailReader
+from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
 from src.llm.config import build_gateway
 from src.llm.gateway import LLMGateway
@@ -45,6 +48,12 @@ class Agent:
         mail = GmailReader(get_gmail_service)
         labels = GmailLabeler(get_gmail_service, sf, dry_run=os.getenv("LABELS_DRY_RUN") == "1")
         history = DbSenderHistory(sf)
+        self.approvals = ApprovalService(sf, jobs)
+        self.chat_store = ChatStore(sf)
+        retriever = DbRetriever(IndexStore(sf), gateway)
+        lookup = DbEmailLookup(sf)
+        docs = DbDocCatalog(sf)
+        rules = RuleAdmin(sf)
 
         def context_factory(run: RunScope, email_id: str) -> AgentContext:
             return AgentContext(
@@ -58,9 +67,14 @@ class Agent:
                 actions=self.actions,
                 policy=self.policy,
                 kb=kb,
+                retriever=retriever,
+                lookup=lookup,
+                docs=docs,
+                pending=self.approvals,
+                rules=rules,
+                cards=self.chat_store,
             )
 
-        self.approvals = ApprovalService(sf, jobs)
         self.execute_action = ExecuteActionFlow(
             self.approvals, store, GmailActions(get_gmail_service, has_scope)
         )

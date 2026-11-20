@@ -1,5 +1,5 @@
 """Vocabulary shared by the agent runtime, its ports and its tools."""
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal, get_args
 
 from pydantic import Field
@@ -88,6 +88,32 @@ class LabelInfo(Schema):
     id: str
     name: str
     type: str | None
+
+
+class MailHit(Schema):
+    """One search result over the index (email or indexed document)."""
+
+    kind: Literal["email", "document"]
+    id: str  # email id, or attachment id as text
+    date: str | None
+    category: str | None  # email category, or document class/type
+    sender: str | None  # email sender, or document issuer
+    title: str
+    score: float  # cosine similarity; 0 for keyword-only hits
+
+
+class DocHit(Schema):
+    id: int
+    email_id: str
+    doc_class: str | None
+    doc_type: str | None
+    title: str
+    issuer: str | None
+    amount_cents: int | None
+    due_on: date | None
+    filename: str
+    mime_type: str
+    size: int
 
 
 # --- chat cards ---------------------------------------------------------------

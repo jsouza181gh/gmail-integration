@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Literal
 
-from sqlalchemy import ColumnElement, Float, cast, func, select
+from sqlalchemy import ColumnElement, Float, cast, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.models import Attachment, Email, EmailEmbedding, Run, RunEmail
@@ -15,6 +15,8 @@ from src.db.rows import AttachmentRow, EmailRow, RunRow
 from src.db.vector import Vector
 from src.gmail.full import AttachmentRef, FullMessage
 from src.llm.types import Schema
+
+KEYWORD_WORDS = 5
 
 
 class EmailText(Schema):
@@ -291,6 +293,47 @@ class IndexStore:
             for i, title, name, d in docs
         ]
         return sorted(hits, key=lambda h: h.score, reverse=True)[:k]
+
+    def keyword(self, text: str, k: int) -> list[SearchHit]:
+        """Emails and documents containing every word (≥ 3 letters) of `text`.
+
+        The complement of `search` for names, numbers and codes that
+        embeddings blur; works on SQLite too. Score is 0 (no similarity).
+        """
+        words = [w for w in text.split() if len(w) >= 3][:KEYWORD_WORDS]
+        if not words:
+            return []
+        email_where = [
+            or_(*(c.icontains(w, autoescape=True) for c in (Email.subject, Email.sender,
+                                                             Email.snippet)))
+            for w in words
+        ]
+        doc_where = [
+            or_(*(c.icontains(w, autoescape=True) for c in (Attachment.title, Attachment.issuer,
+                                                             Attachment.filename)))
+            for w in words
+        ]
+        with self.sf() as s:
+            emails = s.execute(
+                select(Email.id, Email.subject, Email.sender)
+                .where(*email_where)
+                .order_by(Email.received_at.desc().nulls_last(), Email.id.desc())
+                .limit(k)
+            ).all()
+            docs = s.execute(
+                select(Attachment.id, Attachment.title, Attachment.filename)
+                .where(Attachment.status == "done", *doc_where)
+                .order_by(Attachment.id.desc())
+                .limit(k)
+            ).all()
+        return [
+            SearchHit(kind="email", id=i, title=f"{subj or '(sem assunto)'} — {sender or ''}",
+                      score=0.0)
+            for i, subj, sender in emails
+        ] + [
+            SearchHit(kind="attachment", id=str(i), title=title or name, score=0.0)
+            for i, title, name in docs
+        ]
 
     def documents(
         self, doc_class: str | None, doc_type: str | None, limit: int

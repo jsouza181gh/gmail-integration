@@ -9,6 +9,18 @@ from src.agent.context import AgentContext
 from src.agent.registry import AgentTool, Registry, ToolEntry
 from src.agent.state import AgentState, EmailFacts
 from src.agent.tools.act import ActCtx, ActState, propose_action
+from src.agent.tools.chat_read import (
+    DocsCtx,
+    ReadCtx,
+    RulesCtx,
+    SearchCtx,
+    StatsCtx,
+    find_documents,
+    list_rules,
+    read_email,
+    search_mail,
+    sender_stats,
+)
 from src.agent.tools.classify import ClassifyCtx, ClassifyState, classify_email
 from src.agent.tools.labels import LabelCtx, LabelState, apply_labels
 from src.agent.tools.mail import (
@@ -35,6 +47,11 @@ SLICES: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "list_labels": (MailCtx, NoState),
     "propose_action": (ActCtx, ActState),
     "apply_labels": (LabelCtx, LabelState),
+    "search_mail": (SearchCtx, NoState),
+    "read_email": (ReadCtx, NoState),
+    "find_documents": (DocsCtx, NoState),
+    "list_rules": (RulesCtx, NoState),
+    "sender_stats": (StatsCtx, NoState),
 }
 
 
@@ -103,6 +120,36 @@ def build_registry() -> Registry:
         AgentTool(
             list_labels,
             context_of=lambda c: MailCtx(mail=c.mail),
+            state_of=lambda c, s: NoState(),
+            contexts=CHAT,
+        ),
+        AgentTool(
+            search_mail,
+            context_of=lambda c: SearchCtx(retriever=c.retriever, call=c.call()),
+            state_of=lambda c, s: NoState(),
+            contexts=CHAT,
+        ),
+        AgentTool(
+            read_email,
+            context_of=lambda c: ReadCtx(lookup=c.lookup, mail=c.mail),
+            state_of=lambda c, s: NoState(),
+            contexts=CHAT,
+        ),
+        AgentTool(
+            find_documents,
+            context_of=lambda c: DocsCtx(docs=c.docs),
+            state_of=lambda c, s: NoState(),
+            contexts=CHAT,
+        ),
+        AgentTool(
+            list_rules,
+            context_of=lambda c: RulesCtx(rules=c.rules),
+            state_of=lambda c, s: NoState(),
+            contexts=CHAT,
+        ),
+        AgentTool(
+            sender_stats,
+            context_of=lambda c: StatsCtx(history=c.history),
             state_of=lambda c, s: NoState(),
             contexts=CHAT,
         ),

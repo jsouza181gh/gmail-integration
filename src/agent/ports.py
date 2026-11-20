@@ -6,9 +6,14 @@ use fakes. `AgentContext` validates every dependency against these.
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
+from src.agent.rules import RuleCondition
 from src.agent.types import (
     ActionKind,
+    CardDraft,
+    ChatChannel,
+    DocHit,
     LabelInfo,
+    MailHit,
     MailPage,
     MailQuery,
     PolicyDecision,
@@ -20,6 +25,8 @@ from src.agent.types import (
     Trigger,
 )
 from src.classification.taxonomy import Taxonomy
+from src.db.rows import EmailRow, PendingActionRow, RuleRow
+from src.llm.types import CallContext
 
 
 @runtime_checkable
@@ -76,3 +83,52 @@ class TaxonomySource(Protocol):
     def active_taxonomy(self) -> Taxonomy | None: ...
 
     def active_preferences(self, scope: str) -> list[str]: ...
+
+
+# --- chat ---------------------------------------------------------------------
+
+@runtime_checkable
+class Retriever(Protocol):
+    def search(self, query: str, k: int, call: CallContext) -> tuple[MailHit, ...]: ...
+
+
+@runtime_checkable
+class EmailLookup(Protocol):
+    def email(self, email_id: str) -> EmailRow | None: ...
+
+    def body(self, email_id: str) -> str | None: ...
+
+
+@runtime_checkable
+class DocCatalog(Protocol):
+    def find(
+        self, doc_class: str | None, doc_type: str | None, text: str | None, limit: int
+    ) -> tuple[DocHit, ...]: ...
+
+    def get(self, ids: Sequence[int]) -> tuple[DocHit, ...]: ...
+
+
+@runtime_checkable
+class PendingReader(Protocol):
+    def pending(
+        self,
+        *,
+        ids: Sequence[int] = (),
+        sender: str | None = None,
+        rule_id: int | None = None,
+        kind: str | None = None,
+    ) -> tuple[PendingActionRow, ...]: ...
+
+
+@runtime_checkable
+class RuleReader(Protocol):
+    def existing(self, cond: RuleCondition, limit: int) -> tuple[list[str], int]: ...
+
+    def list(self) -> tuple[RuleRow, ...]: ...
+
+    def get(self, rule_id: int) -> RuleRow | None: ...
+
+
+@runtime_checkable
+class CardSink(Protocol):
+    def add_card(self, message_id: int, channel: ChatChannel, draft: CardDraft) -> int: ...
