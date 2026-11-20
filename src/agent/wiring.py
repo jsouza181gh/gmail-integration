@@ -77,6 +77,7 @@ class Agent:
                 pending=self.approvals,
                 rules=rules,
                 cards=self.chat_store,
+                refs=self.chat_store,
             )
 
         def context_factory(run: RunScope, email_id: str) -> AgentContext:

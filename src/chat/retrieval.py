@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.agent.ports import MailReader
-from src.agent.types import DocHit, MailHit
+from src.agent.types import DocHit, MailHit, MailItem
 from src.db.models import Attachment, Email
 from src.db.rows import EmailRow
 from src.gmail.messages import parse_date
@@ -101,14 +101,18 @@ class DbEmailLookup:
         if found is not None:
             return found
         item = self.mail.item(email_id)
-        if item is None:
-            return None
+        return None if item is None else self.remember(item)
+
+    def remember(self, item: MailItem) -> EmailRow:
         with self.sf.begin() as s:
-            if s.get(Email, item.id) is None:
-                s.add(Email(id=item.id, sender=item.sender, subject=item.subject,
+            row = s.get(Email, item.id)
+            if row is None:
+                row = Email(id=item.id, sender=item.sender, subject=item.subject,
                             date=item.date, snippet=item.snippet,
-                            received_at=parse_date(item.date), attempts=0, source="chat"))
-        return self.email(item.id)
+                            received_at=parse_date(item.date), attempts=0, source="chat")
+                s.add(row)
+                s.flush()
+            return EmailRow.model_validate(row)
 
 
 class DbDocCatalog:

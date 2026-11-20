@@ -19,17 +19,20 @@ from src.agent.ports import (
     EmailLookup,
     MailReader,
     PendingReader,
+    RefSink,
     RuleReader,
     TaxonomySource,
 )
 from src.agent.rules import RuleCondition
 from src.agent.state import StateUpdate
 from src.agent.tools.mail import NoState
+from src.agent.tools.refs import remember
 from src.agent.types import (
     NEVER_AUTO,
     ActionKind,
     ActionsDraft,
     DocumentsDraft,
+    EmailRef,
     EmailsDraft,
     KbScopeName,
     MailQuery,
@@ -57,7 +60,11 @@ class CardCtx(Deps):
     chat: ChatScope
 
 
-class EmailsCtx(CardCtx):
+class RefCardCtx(CardCtx):
+    refs: RefSink
+
+
+class EmailsCtx(RefCardCtx):
     lookup: EmailLookup
 
 
@@ -69,7 +76,7 @@ class PendingCtx(CardCtx):
     pending: PendingReader
 
 
-class ProposeActionCtx(CardCtx):
+class ProposeActionCtx(RefCardCtx):
     actions: ActionSink
     lookup: EmailLookup
     mail: MailReader
@@ -100,8 +107,11 @@ def show_emails(
         email_ids: Up to 10 ids from search_mail or list_emails.
     """
     ctx = runtime.context
-    found = [i for i in dict.fromkeys(email_ids[:SHOW_EMAILS_MAX]) if ctx.lookup.ensure(i)]
+    rows = [r for i in dict.fromkeys(email_ids[:SHOW_EMAILS_MAX]) if (r := ctx.lookup.ensure(i))]
+    found = [r.id for r in rows]
     missing = [i for i in email_ids[:SHOW_EMAILS_MAX] if i not in found]
+    remember(ctx.refs, ctx.chat.message_id,
+             (EmailRef(email_id=r.id, subject=r.subject, sender=r.sender) for r in rows))
     if not found:
         raise ValueError(f"não existe mais no Gmail: {', '.join(missing)}")
     card = _card(ctx, EmailsDraft(email_ids=tuple(found)))
@@ -225,10 +235,13 @@ def propose_email_actions(
     ctx = runtime.context
     action_ids: list[int] = []
     counts: Counter[str] = Counter()
+    seen: list[EmailRef] = []
     for email_id in _batch_ids(ctx, email_ids, gmail_query):
-        if ctx.lookup.ensure(email_id) is None:
+        row = ctx.lookup.ensure(email_id)
+        if row is None:
             counts["gone"] += 1
             continue
+        seen.append(EmailRef(email_id=row.id, subject=row.subject, sender=row.sender))
         ref = ctx.actions.propose(email_id, kind, reason, run_id=ctx.run.run_id, trigger="chat")
         counts[ref.outcome] += 1
         if ref.outcome in ("suggested", "duplicate") and ref.action_id is not None:
@@ -240,6 +253,7 @@ def propose_email_actions(
                            ("gone", "não existem mais no Gmail"))
         if counts[key]
     ]
+    remember(ctx.refs, ctx.chat.message_id, seen)
     if not action_ids:
         raise ValueError("nenhuma sugestão criada; " + "; ".join(notes or ["nenhum e-mail"]))
     card = _card(ctx, ActionsDraft(action_ids=tuple(action_ids)))

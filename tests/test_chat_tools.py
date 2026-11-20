@@ -56,6 +56,7 @@ class ChatWorld:
             "chat": ChatScope(conversation_id=conv.id, message_id=self.message_id,
                               channel="audio"),
             "cards": self.store,
+            "refs": self.store,
             "rules": self.rules,
             "actions": self.actions,
             "pending": self.approvals,
@@ -285,3 +286,23 @@ def test_show_emails_gone_id_message(w: ChatWorld) -> None:
 def test_read_email_of_spam_id_reads_gmail_body(w: ChatWorld) -> None:
     res = w.run("read_email", {"email_id": "sp1"})
     assert res.ok and "corpo de sp1" in res.message.content
+
+
+def _refs(w: ChatWorld) -> list[str]:
+    from src.db.models import ChatMessageRef
+
+    with w.sf() as s:
+        return [r.email_id for r in s.query(ChatMessageRef).order_by(ChatMessageRef.position)]
+
+
+def test_list_emails_records_refs_only_in_chat(w: ChatWorld) -> None:
+    deps = {k: v for k, v in w.deps.items() if k != "chat"}
+    assert _run(w.trail, "list_emails", {"query": "in:spam"}, deps).ok
+    assert _refs(w) == []
+    assert w.run("list_emails", {"query": "in:spam"}).ok
+    assert _refs(w) == ["sp1", "sp2"]
+
+
+def test_show_and_search_record_refs(w: ChatWorld) -> None:
+    assert w.run("show_emails", {"email_ids": ["e1", "sp1"]}).ok
+    assert _refs(w) == ["e1", "sp1"]

@@ -90,6 +90,14 @@ class LabelInfo(Schema):
     type: str | None
 
 
+class EmailRef(Schema):
+    """An email an assistant answer referenced (kept for the next turns)."""
+
+    email_id: str
+    subject: str | None
+    sender: str | None
+
+
 class MailHit(Schema):
     """One search result over the index (email or indexed document)."""
 

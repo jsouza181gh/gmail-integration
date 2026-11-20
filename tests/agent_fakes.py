@@ -13,6 +13,7 @@ from src.agent.types import (
     CardDraft,
     ChatChannel,
     DocHit,
+    EmailRef,
     LabelInfo,
     MailHit,
     MailItem,
@@ -154,6 +155,9 @@ class NoLookup:
     def body(self, email_id: str) -> str | None:
         raise AssertionError("lookup not expected")
 
+    def remember(self, item: MailItem) -> EmailRow:
+        raise AssertionError("lookup not expected")
+
     def ensure(self, email_id: str) -> EmailRow | None:
         raise AssertionError("lookup not expected")
 
@@ -196,6 +200,11 @@ class NoCards:
         raise AssertionError("cards not expected")
 
 
+class NoRefs:
+    def add_refs(self, message_id: int, refs: Sequence[EmailRef]) -> None:
+        return None
+
+
 def make_ctx(
     *,
     run_id: int,
@@ -223,6 +232,7 @@ def make_ctx(
         "pending": NoPending(),
         "rules": NoRules(),
         "cards": NoCards(),
+        "refs": NoRefs(),
     }
     fields.update(extra or {})
     fields.update(deps)

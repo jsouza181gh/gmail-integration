@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.agent.prompts import HistoryTurn
 from src.agent.types import (
+    EmailRef,
     ActionsDraft,
     CardDraft,
     ChatChannel,
@@ -25,6 +26,7 @@ from src.agent.types import (
 )
 from src.chat.audio import WavInfo
 from src.db.models import (
+    ChatMessageRef,
     Attachment,
     AutomationRule,
     ChatAudio,
@@ -40,6 +42,8 @@ from src.llm.types import Schema
 TEXT_MAX = 4000
 TITLE_MAX = 60
 HISTORY_LIMIT = 20
+REFS_MAX = 20  # stored per answer
+REFS_SHOWN = 10  # rendered in the history
 LIVE = ("queued", "running")
 INFO_KINDS = frozenset({"emails", "documents"})
 STATUS_PT = {
@@ -341,7 +345,14 @@ class ChatStore:
                 .order_by(ChatMessage.id.desc())
                 .limit(limit)
             ).all()
-            cards = self._cards(s, [m.id for m in rows if m.role == "assistant"])
+            answers = [m.id for m in rows if m.role == "assistant"]
+            cards = self._cards(s, answers)
+            refs: dict[int, list[ChatMessageRef]] = {}
+            for r in s.scalars(
+                select(ChatMessageRef).where(ChatMessageRef.message_id.in_(answers))
+                .order_by(ChatMessageRef.message_id, ChatMessageRef.position)
+            ):
+                refs.setdefault(r.message_id, []).append(r)
         lines: list[HistoryTurn] = []
         for m in reversed(rows):
             text = m.text
@@ -349,12 +360,33 @@ class ChatStore:
                 f"[cartão #{c.id} {self._summary_of(c)}: {STATUS_PT.get(c.status, c.status)}]"
                 for c in cards.get(m.id, ())
             ]
+            if shown := refs.get(m.id, [])[:REFS_SHOWN]:
+                notes.append("[e-mails desta resposta: " + "; ".join(
+                    f"{r.email_id} — {r.subject or '(sem assunto)'} ({r.sender or '-'})"
+                    for r in shown
+                ) + "]")
             if notes:
                 text = "\n".join([text, *notes]) if text else "\n".join(notes)
             if text:
                 lines.append(HistoryTurn(role="user" if m.role == "user" else "assistant",
                                          text=text))
         return lines
+
+    def add_refs(self, message_id: int, refs: Sequence[EmailRef]) -> None:
+        """Remember the emails an answer referenced: first mention wins, at most REFS_MAX."""
+        with self.sf.begin() as s:
+            have = list(s.scalars(
+                select(ChatMessageRef.email_id).where(ChatMessageRef.message_id == message_id)
+            ))
+            for ref in refs:
+                if len(have) >= REFS_MAX:
+                    break
+                if ref.email_id in have:
+                    continue
+                s.add(ChatMessageRef(message_id=message_id, position=len(have),
+                                     email_id=ref.email_id, subject=ref.subject,
+                                     sender=ref.sender))
+                have.append(ref.email_id)
 
     # --- cards ------------------------------------------------------------------
 

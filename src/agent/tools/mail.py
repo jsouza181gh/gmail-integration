@@ -3,9 +3,10 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
 from src.agent.context import Deps
-from src.agent.ports import MailReader
+from src.agent.ports import EmailLookup, MailReader, RefSink
 from src.agent.state import BodyFetched, StateUpdate
-from src.agent.types import MailQuery
+from src.agent.tools.refs import remember
+from src.agent.types import EmailRef, MailQuery
 from src.llm.types import Schema
 
 MAX_RESULTS_LIMIT = 100
@@ -22,6 +23,13 @@ class BodyState(Schema):
 
 class MailCtx(Deps):
     mail: MailReader
+
+
+class ListCtx(MailCtx):
+    # chat only: list results are stored and remembered for "esses e-mails"
+    lookup: EmailLookup | None = None
+    refs: RefSink | None = None
+    message_id: int | None = None
 
 
 class NoState(Schema):
@@ -46,7 +54,7 @@ def get_email_body(runtime: ToolRuntime[BodyCtx, BodyState]) -> tuple[str, State
 
 @tool(response_format="content_and_artifact", parse_docstring=True)
 def list_emails(
-    runtime: ToolRuntime[MailCtx, NoState],
+    runtime: ToolRuntime[ListCtx, NoState],
     query: str | None = None,
     label_ids: list[str] | None = None,
     max_results: int = 10,
@@ -81,6 +89,12 @@ def list_emails(
             include_spam_trash=include_spam_trash,
         )
     )
+    ctx = runtime.context
+    if ctx.lookup is not None and ctx.message_id is not None:
+        remember(ctx.refs, ctx.message_id, (
+            EmailRef(email_id=ctx.lookup.remember(i).id, subject=i.subject, sender=i.sender)
+            for i in page.items
+        ))
     return _as_data(page.model_dump_json()), None
 
 

@@ -44,6 +44,7 @@ from src.agent.tools.labels import LabelCtx, LabelState, apply_labels
 from src.agent.tools.mail import (
     BodyCtx,
     BodyState,
+    ListCtx,
     MailCtx,
     NoState,
     get_email_body,
@@ -60,7 +61,7 @@ SLICES: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "classify_email": (ClassifyCtx, ClassifyState),
     "get_email_body": (BodyCtx, BodyState),
     "sender_history": (SenderCtx, SenderState),
-    "list_emails": (MailCtx, NoState),
+    "list_emails": (ListCtx, NoState),
     "list_labels": (MailCtx, NoState),
     "propose_action": (ActCtx, ActState),
     "apply_labels": (LabelCtx, LabelState),
@@ -150,7 +151,10 @@ def build_registry() -> Registry:
         ),
         AgentTool(
             list_emails,
-            context_of=lambda c: MailCtx(mail=c.mail),
+            context_of=lambda c: ListCtx(
+                mail=c.mail, lookup=c.lookup, refs=c.refs,
+                message_id=c.chat.message_id if c.chat else None,
+            ),
             state_of=lambda c, s: NoState(),
             contexts=CHAT,
         ),
@@ -162,7 +166,10 @@ def build_registry() -> Registry:
         ),
         AgentTool(
             search_mail,
-            context_of=lambda c: SearchCtx(retriever=c.retriever, call=c.call()),
+            context_of=lambda c: SearchCtx(
+                retriever=c.retriever, call=c.call(), refs=c.refs,
+                message_id=c.chat.message_id if c.chat else None,
+            ),
             state_of=lambda c, s: NoState(),
             contexts=CHAT,
         ),
@@ -192,7 +199,8 @@ def build_registry() -> Registry:
         ),
         AgentTool(
             show_emails,
-            context_of=lambda c: EmailsCtx(cards=c.cards, chat=chat_of(c), lookup=c.lookup),
+            context_of=lambda c: EmailsCtx(cards=c.cards, chat=chat_of(c), lookup=c.lookup,
+                                           refs=c.refs),
             state_of=_no_state,
             contexts=CHAT,
         ),
@@ -218,7 +226,7 @@ def build_registry() -> Registry:
             propose_email_actions,
             context_of=lambda c: ProposeActionCtx(
                 cards=c.cards, chat=chat_of(c), actions=c.actions, lookup=c.lookup, mail=c.mail,
-                run=c.run,
+                run=c.run, refs=c.refs,
             ),
             state_of=_no_state,
             contexts=CHAT,

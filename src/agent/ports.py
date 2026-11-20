@@ -12,6 +12,7 @@ from src.agent.types import (
     CardDraft,
     ChatChannel,
     DocHit,
+    EmailRef,
     LabelInfo,
     MailHit,
     MailItem,
@@ -101,6 +102,10 @@ class EmailLookup(Protocol):
 
     def body(self, email_id: str) -> str | None: ...
 
+    def remember(self, item: MailItem) -> EmailRow:
+        """Store an email already fetched from Gmail (source='chat') if new."""
+        ...
+
     def ensure(self, email_id: str) -> EmailRow | None:
         """The stored email, fetching it from Gmail (spam, trash, old mail)
         and storing it as source='chat' when unknown; None when Gmail no
@@ -136,6 +141,11 @@ class RuleReader(Protocol):
     def list(self) -> tuple[RuleRow, ...]: ...
 
     def get(self, rule_id: int) -> RuleRow | None: ...
+
+
+@runtime_checkable
+class RefSink(Protocol):
+    def add_refs(self, message_id: int, refs: Sequence[EmailRef]) -> None: ...
 
 
 @runtime_checkable
