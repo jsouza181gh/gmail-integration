@@ -215,3 +215,19 @@ def test_cli_render(session_factory: sessionmaker[Session]) -> None:
     w.drain()
     out = render(w.backfill.progress())
     assert "concluído" in out and "classificados: 1" in out and "backfill_page" in out
+
+
+def test_paused_backfill_defers_without_listing(session_factory: sessionmaker[Session]) -> None:
+    from src.agent.settings import RuntimeSettings
+
+    w = World(session_factory, [["a"]])
+    w.backfill.start()
+    RuntimeSettings(session_factory).set_backfill_paused(True)
+    job = w.jobs.claim("w")
+    assert job is not None
+    with pytest.raises(Deferred) as got:
+        w.backfill.handle(job)
+    assert got.value.reason == "backfill pausado" and w.lists == []
+    RuntimeSettings(session_factory).set_backfill_paused(False)
+    w.backfill.handle(job)
+    assert len(w.lists) == 1

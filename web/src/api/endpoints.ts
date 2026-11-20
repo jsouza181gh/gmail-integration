@@ -70,6 +70,8 @@ export const documentLink = (id: number) =>
 // --- ops ----------------------------------------------------------------
 export const backfill = () => request('GET', '/api/backfill', { schema: s.BackfillStatus })
 export const backfillStart = () => request('POST', '/api/backfill/start', { schema: s.BackfillStatus })
+export const backfillPause = () => request('POST', '/api/backfill/pause', { schema: s.BackfillStatus })
+export const backfillResume = () => request('POST', '/api/backfill/resume', { schema: s.BackfillStatus })
 export const runs = (p: { trigger?: string; status?: string; limit?: number } = {}) =>
   request('GET', '/api/runs', { query: { ...p }, schema: z.array(s.Run) })
 export const runDetail = (id: number) => request('GET', `/api/runs/${id}`, { schema: s.RunDetail })

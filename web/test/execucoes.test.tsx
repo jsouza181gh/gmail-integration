@@ -156,3 +156,38 @@ test('clicking_a_run_opens_its_steps_and_failed_runs_show_the_error', async () =
   await user.click(await screen.findByRole('button', { name: /Sua conta de novembro chegou/ }))
   expect(await screen.findByRole('region', { name: 'Passos do run #812' })).toBeInTheDocument()
 })
+
+test('pause_then_resume_from_the_progress_card', async () => {
+  let state = backfillStatus
+  const calls: string[] = []
+  load()
+  server.use(
+    http.get('/api/backfill', () => json(state)),
+    http.post('/api/backfill/pause', () => {
+      calls.push('pause')
+      state = { ...backfillStatus, paused: true }
+      return json(state)
+    }),
+    http.post('/api/backfill/resume', () => {
+      calls.push('resume')
+      state = { ...backfillStatus, paused: false }
+      return json(state)
+    }),
+  )
+  const user = userEvent.setup()
+  renderApp('/execucoes')
+  const card = await screen.findByRole('region', { name: 'Progresso do backfill' })
+  await user.click(await within(card).findByRole('button', { name: 'Pausar' }))
+  expect(await within(card).findByText('Pausado por você')).toBeInTheDocument()
+  await user.click(within(card).getByRole('button', { name: 'Retomar' }))
+  expect(await within(card).findByText(/Rodando, página/)).toBeInTheDocument()
+  expect(calls).toEqual(['pause', 'resume'])
+})
+
+test('finished_backfill_has_no_pause_button', async () => {
+  load({ backfill: withProgress({ fetch_done: true, jobs: {} }, { percent: 100 }) })
+  renderApp('/execucoes')
+  const card = await screen.findByRole('region', { name: 'Progresso do backfill' })
+  expect(await within(card).findByText('Concluído')).toBeInTheDocument()
+  expect(within(card).queryByRole('button', { name: 'Pausar' })).not.toBeInTheDocument()
+})

@@ -164,6 +164,7 @@ export const runDetail: RunDetail = {
 }
 
 export const backfillStatus: BackfillStatus = {
+  paused: false,
   progress: {
     run_id: 3,
     pages: 29,

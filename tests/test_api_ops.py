@@ -125,3 +125,37 @@ def test_security_lists(api: Api) -> None:
     assert "login_ok" in kinds
     assert api.client.get("/api/security/blocks").json() == {"global_lock": False, "ips": []}
     assert api.client.get("/api/notifications").json()[0]["kind"] == "job_dead"
+
+
+def test_backfill_pause_and_resume(api: Api) -> None:
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from src.db.models import ConfigAudit, Job
+
+    c = api.client
+    assert c.get("/api/backfill").json()["paused"] is False
+    c.post("/api/backfill/start")
+    paused = c.post("/api/backfill/pause")
+    assert paused.status_code == 200 and paused.json()["paused"] is True
+    with api.sf.begin() as s:  # the worker deferred the page while paused
+        job = s.scalars(select(Job).where(Job.kind == "backfill_page")).one()
+        job.run_after = api.clock() + timedelta(minutes=5)
+        job.last_error = "backfill pausado"
+    resumed = c.post("/api/backfill/resume").json()
+    assert resumed["paused"] is False and resumed["deferred_until"] is None
+    with api.sf() as s:
+        assert s.scalars(select(Job.run_after)).one().replace(tzinfo=None) <= api.clock().replace(tzinfo=None)
+        assert [a.entity for a in s.scalars(select(ConfigAudit))] == ["settings", "settings"]
+
+
+def test_backfill_resume_restarts_a_dead_chain(api: Api) -> None:
+    from sqlalchemy import func, select
+
+    from src.db.models import Job
+
+    api.client.post("/api/backfill/pause")
+    assert api.client.post("/api/backfill/resume").status_code == 200
+    with api.sf() as s:
+        assert s.scalar(select(func.count()).select_from(Job).where(Job.kind == "backfill_page")) == 1
