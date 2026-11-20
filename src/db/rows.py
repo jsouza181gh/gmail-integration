@@ -44,6 +44,7 @@ class AgentConfigRow(Row):
     version: int
     active: bool
     decide_prompt: str
+    chat_prompt: str
     max_turns: int
     created_at: datetime
 
@@ -93,6 +94,7 @@ class RuleRow(Row):
     sender_domain: str | None
     category: str | None
     subject_contains: str | None
+    unless_document: bool
     action: str
     mode: str
     active: bool

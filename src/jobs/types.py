@@ -7,20 +7,27 @@ from pydantic import Field
 from src.llm.types import Schema
 
 JobKind = Literal[
-    "process_email", "execute_action", "index_email", "index_attachment", "backfill_page"
+    "chat_turn", "process_email", "execute_action", "index_email", "index_attachment",
+    "backfill_page",
 ]
 JobStatus = Literal["queued", "running", "done", "dead"]
 
-# Higher runs first. Spec order: chat > new email > approved action > backfill
-# (chat enters with 50 in a later subproject). Indexing new mail outranks the
-# attachments it discovers, and both outrank the history backfill.
+# Higher runs first. Spec order: chat > new email > approved action > backfill.
+# Indexing new mail outranks the attachments it discovers, and both outrank
+# the history backfill. Chat also has its own worker lane.
 PRIORITY: dict[JobKind, int] = {
+    "chat_turn": 50,
     "process_email": 30,
     "execute_action": 20,
     "index_email": 10,
     "index_attachment": 5,
     "backfill_page": 0,
 }
+
+
+class ChatTurnJob(Schema):
+    kind: Literal["chat_turn"] = "chat_turn"
+    message_id: int  # the assistant message to produce
 
 
 class ProcessEmailJob(Schema):
@@ -50,16 +57,20 @@ class BackfillPageJob(Schema):
 
 
 type AnyJob = (
-    ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob | BackfillPageJob
+    ChatTurnJob | ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob
+    | BackfillPageJob
 )
 JobPayload = Annotated[
-    ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob | BackfillPageJob,
+    ChatTurnJob | ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob
+    | BackfillPageJob,
     Field(discriminator="kind"),
 ]
 
 
 def idempotency_key(payload: AnyJob) -> str:
     match payload:
+        case ChatTurnJob(message_id=m):
+            return f"chat_turn:{m}"
         case ProcessEmailJob(email_id=e) | IndexEmailJob(email_id=e):
             return f"{payload.kind}:{e}"
         case ExecuteActionJob(action_id=a):

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.agent.prompts import CHAT_PROMPT_V1
 from src.agent.settings import Channel, audit
 from src.db.models import AgentConfig
 from src.db.rows import AgentConfigRow
@@ -35,18 +36,28 @@ class DbAgentConfigs:
             rows = s.scalars(select(AgentConfig).order_by(AgentConfig.version.desc()))
             return [AgentConfigRow.model_validate(r) for r in rows]
 
-    def create(self, decide_prompt: str, max_turns: int, channel: Channel = "ui") -> AgentConfigRow:
+    def create(
+        self,
+        decide_prompt: str,
+        max_turns: int,
+        channel: Channel = "ui",
+        chat_prompt: str | None = None,
+    ) -> AgentConfigRow:
+        """A new active version; `chat_prompt=None` keeps the active one's."""
         if max_turns not in MAX_TURNS_RANGE:
             raise ValueError("max_turns deve ficar entre 1 e 8")
         if not decide_prompt.strip():
             raise ValueError("o prompt não pode ser vazio")
         now = self._now()
         with self.sf.begin() as s:
-            before = s.scalars(select(AgentConfig.version).where(AgentConfig.active)).first()
+            active = s.scalars(select(AgentConfig).where(AgentConfig.active)).first()
+            before = active.version if active else None
+            if chat_prompt is None or not chat_prompt.strip():
+                chat_prompt = active.chat_prompt if active else CHAT_PROMPT_V1
             version = (s.scalar(select(func.max(AgentConfig.version))) or 0) + 1
             s.execute(update(AgentConfig).values(active=False))
             row = AgentConfig(version=version, active=True, decide_prompt=decide_prompt,
-                              max_turns=max_turns, created_at=now)
+                              chat_prompt=chat_prompt, max_turns=max_turns, created_at=now)
             s.add(row)
             s.flush()
             audit(s, "agent_config", row.id, channel, f"v{before}", f"v{version}", now)

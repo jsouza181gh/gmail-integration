@@ -64,14 +64,17 @@ class KbAdmin:
                 for e in s.scalars(q)
             ]
 
-    def add(self, scope: KbScope, text: str, channel: Channel = "ui") -> KbRow:
+    def add(
+        self, scope: KbScope, text: str, channel: Channel = "ui", source: str | None = None
+    ) -> KbRow:
+        """`source` is the entry's origin (e.g. "audio"); defaults to the channel."""
         text = text.strip()[:KB_TEXT_MAX]
         if not text:
             raise ValueError("texto vazio")
         now = self._now()
         with self.sf.begin() as s:
-            e = KbEntry(kind="preference", scope=scope, text=text, source=channel, active=True,
-                        created_at=now)
+            e = KbEntry(kind="preference", scope=scope, text=text, source=source or channel,
+                        active=True, created_at=now)
             s.add(e)
             s.flush()
             audit(s, "kb_entry", e.id, channel, None, text, now)

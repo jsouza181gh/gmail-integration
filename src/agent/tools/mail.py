@@ -81,7 +81,7 @@ def list_emails(
             include_spam_trash=include_spam_trash,
         )
     )
-    return page.model_dump_json(), None
+    return _as_data(page.model_dump_json()), None
 
 
 @tool(response_format="content_and_artifact")

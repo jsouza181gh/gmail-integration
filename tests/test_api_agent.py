@@ -10,7 +10,7 @@ from tests.api_fakes import Api
 @pytest.fixture
 def api(session_factory: sessionmaker[Session]) -> Api:
     with session_factory.begin() as s:
-        s.add(AgentConfig(version=1, active=True, decide_prompt="v1", max_turns=4))
+        s.add(AgentConfig(version=1, active=True, decide_prompt="v1", chat_prompt="c", max_turns=4))
         s.add(ToolPolicy(target="trash", trigger="webhook", policy="suggest"))
         s.add(ToolPolicy(target="block_sender", trigger="webhook", policy="suggest"))
     a = Api(session_factory)

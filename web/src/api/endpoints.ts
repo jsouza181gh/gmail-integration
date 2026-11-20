@@ -80,8 +80,11 @@ export const usage = (days = 7) =>
 
 // --- agent --------------------------------------------------------------
 export const agentConfig = () => request('GET', '/api/agent/config', { schema: s.ConfigsOut })
-export const newConfig = (decide_prompt: string, max_turns: number) =>
-  request('POST', '/api/agent/config', { body: { decide_prompt, max_turns }, schema: s.AgentConfig })
+export const newConfig = (decide_prompt: string, max_turns: number, chat_prompt?: string) =>
+  request('POST', '/api/agent/config', {
+    body: { decide_prompt, max_turns, ...(chat_prompt ? { chat_prompt } : {}) },
+    schema: s.AgentConfig,
+  })
 export const activateConfig = (id: number) => request('POST', `/api/agent/config/${id}/activate`)
 export const policies = () => request('GET', '/api/agent/policies', { schema: z.array(s.Policy) })
 export const setPolicy = (target: string, trigger: string, policy: string) =>
@@ -94,6 +97,7 @@ export interface NewRule {
   sender_domain?: string
   category?: string
   subject_contains?: string
+  unless_document?: boolean
 }
 export const rules = () => request('GET', '/api/agent/rules', { schema: z.array(s.Rule) })
 export const addRule = (r: NewRule) => request('POST', '/api/agent/rules', { body: r, schema: s.Rule })
@@ -120,3 +124,35 @@ export const securityEvents = (kind?: string) =>
 export const securityBlocks = () => request('GET', '/api/security/blocks', { schema: s.BlocksOut })
 export const notifications = () =>
   request('GET', '/api/notifications', { schema: z.array(s.Notification) })
+
+// --- chat ---------------------------------------------------------------
+export const conversations = (limit = 30) =>
+  request('GET', '/api/chat/conversations', { query: { limit }, schema: z.array(s.Conversation) })
+export const newConversation = () =>
+  request('POST', '/api/chat/conversations', { schema: s.Conversation })
+export const chatMessages = (conversationId: number) =>
+  request('GET', `/api/chat/conversations/${conversationId}/messages`, {
+    schema: z.array(s.ChatMessage),
+  })
+export const sendText = (conversationId: number, text: string) =>
+  request('POST', `/api/chat/conversations/${conversationId}/messages`, {
+    body: { text },
+    schema: s.Turn,
+  })
+export const sendAudio = (conversationId: number, wav: Blob) =>
+  request('POST', `/api/chat/conversations/${conversationId}/audio`, {
+    raw: wav,
+    contentType: 'audio/wav',
+    schema: s.Turn,
+  })
+export const retryTurn = (messageId: number) =>
+  request('POST', `/api/chat/messages/${messageId}/retry`, { schema: s.Turn })
+export interface ConfirmOptions {
+  apply_existing?: boolean
+  verdict?: 'approve' | 'reject'
+}
+export const confirmCard = (cardId: number, opts: ConfirmOptions = {}) =>
+  request('POST', `/api/chat/cards/${cardId}/confirm`, { body: opts, schema: s.ChatCard })
+export const cancelCard = (cardId: number) =>
+  request('POST', `/api/chat/cards/${cardId}/cancel`, { schema: s.ChatCard })
+export const messageAudioUrl = (messageId: number) => `/api/chat/messages/${messageId}/audio`

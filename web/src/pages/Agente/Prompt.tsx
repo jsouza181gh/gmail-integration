@@ -24,13 +24,16 @@ function Editor({ data }: { data: ConfigsOut }) {
   const active: AgentConfig | null = data.active
   const others = data.versions.filter((v) => !v.active)
   const [prompt, setPrompt] = useState(active?.decide_prompt ?? '')
+  const [chatPrompt, setChatPrompt] = useState(active?.chat_prompt ?? '')
   const [turns, setTurns] = useState(String(active?.max_turns ?? 4))
   const [older, setOlder] = useState(others[0] ? String(others[0].id) : '')
 
   const nextVersion = Math.max(0, ...data.versions.map((v) => v.version)) + 1
   const turnsNumber = Number(turns)
   const validTurns = Number.isInteger(turnsNumber) && turnsNumber >= MIN_TURNS && turnsNumber <= MAX_TURNS
-  const changed = prompt !== (active?.decide_prompt ?? '') || turnsNumber !== (active?.max_turns ?? 4)
+  const chatChanged = chatPrompt !== (active?.chat_prompt ?? '')
+  const changed =
+    prompt !== (active?.decide_prompt ?? '') || turnsNumber !== (active?.max_turns ?? 4) || chatChanged
   const chosen = others.find((v) => String(v.id) === older)
 
   const refresh = async () => {
@@ -38,7 +41,7 @@ function Editor({ data }: { data: ConfigsOut }) {
     await qc.invalidateQueries({ queryKey: ['audit'] })
   }
   const save = useMutation({
-    mutationFn: () => api.newConfig(prompt, turnsNumber),
+    mutationFn: () => api.newConfig(prompt, turnsNumber, chatChanged ? chatPrompt : undefined),
     onSuccess: async (row) => {
       toast.show(`Prompt salvo como v${row.version}.`)
       await refresh()
@@ -82,7 +85,7 @@ function Editor({ data }: { data: ConfigsOut }) {
           <button
             type="button"
             className="ia-btn ia-btn--primary ia-btn--sm"
-            disabled={!changed || !validTurns || !prompt.trim() || save.isPending}
+            disabled={!changed || !validTurns || !prompt.trim() || !chatPrompt.trim() || save.isPending}
             onClick={() => save.mutate()}
           >
             {`Salvar como v${nextVersion}`}
@@ -92,6 +95,10 @@ function Editor({ data }: { data: ConfigsOut }) {
       <label className="ia-field">
         <span className="ia-label">Instruções</span>
         <textarea className="prompt-box" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+      </label>
+      <label className="ia-field">
+        <span className="ia-label">Prompt do chat</span>
+        <textarea className="prompt-box" value={chatPrompt} onChange={(e) => setChatPrompt(e.target.value)} />
       </label>
       <label className="ia-field" style={{ maxWidth: 200 }}>
         <span className="ia-label">Máx. de turnos</span>

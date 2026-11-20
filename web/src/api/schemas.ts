@@ -181,6 +181,7 @@ export const Rule = z.object({
   sender_domain: strN,
   category: strN,
   subject_contains: strN,
+  unless_document: z.boolean(),
   action: str,
   mode: str,
   active: z.boolean(),
@@ -209,6 +210,7 @@ export const AgentConfig = z.object({
   version: int,
   active: z.boolean(),
   decide_prompt: str,
+  chat_prompt: str,
   max_turns: int,
   created_at: str,
 })
@@ -283,3 +285,68 @@ export type Decision = z.infer<typeof Decision>
 
 export const DocumentLink = z.object({ url: str, expires_in: int })
 export type DocumentLink = z.infer<typeof DocumentLink>
+
+// --- chat (src/chat/store.py views) ------------------------------------------
+export const Conversation = z.object({ id: int, title: strN, updated_at: str, busy: z.boolean() })
+export type Conversation = z.infer<typeof Conversation>
+
+export const CardItem = z.object({
+  email_id: strN,
+  action_id: int.nullable(),
+  attachment_id: int.nullable(),
+  title: str,
+  subtitle: str,
+  status: strN,
+})
+export type CardItem = z.infer<typeof CardItem>
+
+export const ChatCard = z.object({
+  id: int,
+  kind: z.enum(['rule', 'preference', 'promote', 'policy', 'actions', 'emails', 'documents']),
+  status: z.enum(['proposed', 'confirmed', 'cancelled', 'failed', 'info']),
+  channel: str,
+  error: strN,
+  rule: z
+    .object({
+      name: str,
+      action: str,
+      sender_address: strN,
+      sender_domain: strN,
+      category: strN,
+      subject_contains: strN,
+      unless_document: z.boolean(),
+    })
+    .nullable(),
+  preference: z.object({ scope: str, text: str }).nullable(),
+  promote: z
+    .object({ rule_id: int, name: str, action: str, mode: str, fired: int, approved: int, rejected: int })
+    .nullable(),
+  policy: z.object({ target: str, trigger: str, policy: str }).nullable(),
+  verdict: strN,
+  comment: strN,
+  apply_existing: z.boolean(),
+  affected: int.nullable(),
+  created_rule_id: int.nullable(),
+  kb_entry_id: int.nullable(),
+  items: z.array(CardItem),
+})
+export type ChatCard = z.infer<typeof ChatCard>
+
+export const ChatMessage = z.object({
+  id: int,
+  conversation_id: int,
+  role: z.enum(['user', 'assistant']),
+  text: str,
+  input: z.enum(['text', 'audio']),
+  status: z.enum(['queued', 'running', 'done', 'failed']),
+  progress: strN,
+  error: strN,
+  audio_ms: int.nullable(),
+  run_id: int.nullable(),
+  created_at: str,
+  cards: z.array(ChatCard),
+})
+export type ChatMessage = z.infer<typeof ChatMessage>
+
+export const Turn = z.object({ user: ChatMessage, assistant: ChatMessage })
+export type Turn = z.infer<typeof Turn>

@@ -10,14 +10,20 @@ from pydantic import BaseModel, ConfigDict
 
 from src.agent.ports import (
     ActionSink,
+    CardSink,
+    DocCatalog,
+    EmailLookup,
     KbReader,
     Labeler,
     MailReader,
+    PendingReader,
     PolicyReader,
+    Retriever,
+    RuleReader,
     SenderHistorySource,
     TaxonomySource,
 )
-from src.agent.types import Trigger
+from src.agent.types import ChatChannel, Trigger
 from src.llm.types import CallContext, Schema, StructuredGenerator, ToolCaller
 
 
@@ -31,6 +37,14 @@ class RunScope(Schema):
     config_id: int
 
 
+class ChatScope(Schema):
+    """The chat turn a run answers: where cards go and how the user spoke."""
+
+    conversation_id: int
+    message_id: int  # the assistant message being produced
+    channel: ChatChannel
+
+
 class LLMDeps(Deps):
     structured: StructuredGenerator
     tools: ToolCaller
@@ -39,6 +53,7 @@ class LLMDeps(Deps):
 class AgentContext(Deps):
     run: RunScope
     email_id: str | None  # the email a webhook run is about; None in chat
+    chat: ChatScope | None = None  # the turn a chat run answers; None in webhook
     step_id: int | None = None  # set by the executor for the step in flight
     llm: LLMDeps
     taxonomy: TaxonomySource
@@ -48,6 +63,12 @@ class AgentContext(Deps):
     actions: ActionSink
     policy: PolicyReader
     kb: KbReader
+    retriever: Retriever
+    lookup: EmailLookup
+    docs: DocCatalog
+    pending: PendingReader
+    rules: RuleReader
+    cards: CardSink
 
     def for_step(self, step_id: int) -> Self:
         return self.model_copy(update={"step_id": step_id})

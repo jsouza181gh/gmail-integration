@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/agent", dependencies=[Depends(require_user)], ta
 
 class ConfigIn(Schema):
     decide_prompt: str
+    chat_prompt: str | None = None
     max_turns: int
 
 
@@ -41,6 +42,7 @@ class RuleIn(Schema):
     sender_domain: str | None = None
     category: str | None = None
     subject_contains: str | None = None
+    unless_document: bool = False
 
 
 class KbIn(Schema):
@@ -74,7 +76,9 @@ def config(request: Request) -> ConfigsOut:
 def new_config(body: ConfigIn, request: Request) -> AgentConfigRow:
     deps = get_deps(request)
     try:
-        return DbAgentConfigs(deps.sf, deps.clock).create(body.decide_prompt, body.max_turns)
+        return DbAgentConfigs(deps.sf, deps.clock).create(
+            body.decide_prompt, body.max_turns, chat_prompt=body.chat_prompt
+        )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

@@ -35,7 +35,7 @@ def seed(sf: sessionmaker[Session]) -> None:
                         snippet=f"snip {i}", category=cat, is_relevant=rel, deadline=dl,
                         received_at=T0 - timedelta(hours=i), attempts=0, reason=f"motivo {i}",
                         body=f"corpo {i}"))
-        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", max_turns=4))
+        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", chat_prompt="c", max_turns=4))
         s.flush()
         s.add(Attachment(email_id="e1", part_id="1", filename="rg.pdf", mime_type="application/pdf",
                          size=10, status="done", doc_class="pessoal", doc_type="rg", title="RG"))

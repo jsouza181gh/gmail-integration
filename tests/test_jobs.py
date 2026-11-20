@@ -280,3 +280,49 @@ def test_cli_requeue_all_dead(session_factory: sessionmaker[Session], clock: Clo
     assert "process_email" in status(jobs) and "boom" in dead(jobs, 10, None)
     assert requeue(jobs, [], True, "process_email").startswith("2 job(s)")
     assert jobs.counts().queued == 2
+
+
+def test_chat_turn_roundtrip_and_priority(jobs: JobStore) -> None:
+    from src.jobs.types import ChatTurnJob
+
+    jobs.enqueue(ProcessEmailJob(email_id="a"))
+    assert jobs.enqueue(ChatTurnJob(message_id=9)) is True
+    assert jobs.enqueue(ChatTurnJob(message_id=9)) is False
+    first = jobs.claim("w1")
+    assert first is not None and first.payload == ChatTurnJob(message_id=9)
+
+
+def test_chat_lane_claims_only_chat(jobs: JobStore) -> None:
+    from src.jobs.types import BackfillPageJob, ChatTurnJob
+
+    jobs.enqueue(BackfillPageJob(run_id=1, page_no=0))
+    assert jobs.claim("chat", kinds=frozenset({"chat_turn"})) is None
+    jobs.enqueue(ChatTurnJob(message_id=1))
+    got = jobs.claim("chat", kinds=frozenset({"chat_turn"}))
+    assert got is not None and got.payload.kind == "chat_turn"
+
+
+def test_main_lane_excludes_chat(jobs: JobStore) -> None:
+    from src.jobs.types import ChatTurnJob
+
+    jobs.enqueue(ChatTurnJob(message_id=1))
+    jobs.enqueue(ProcessEmailJob(email_id="a"))
+    got = jobs.claim("main", exclude=frozenset({"chat_turn"}))
+    assert got is not None and got.payload == ProcessEmailJob(email_id="a")
+    assert jobs.claim("main", exclude=frozenset({"chat_turn"})) is None
+
+
+def test_non_housekeeping_lane_skips_requeue(jobs: JobStore) -> None:
+    from src.jobs.types import ChatTurnJob
+
+    jobs.enqueue(ProcessEmailJob(email_id="a"))
+    assert jobs.claim("main") is not None  # running in the main lane
+    seen = Recorder()
+    lane = Worker(jobs, {"chat_turn": seen}, on_dead=lambda j, e: None, poll_s=0,
+                  sleep=lambda _: None, worker_id="chat", heartbeat=None,
+                  kinds=frozenset({"chat_turn"}), housekeeping=False)
+    jobs.enqueue(ChatTurnJob(message_id=1))
+    loops = iter([False, True])
+    lane.run_forever(stop=lambda: next(loops))
+    assert len(seen.seen) == 1
+    assert jobs.counts().running == 1  # the main lane's job was left alone

@@ -72,7 +72,7 @@ def test_backfill_start_is_idempotent(api: Api) -> None:
 def test_runs_detail_with_steps_and_calls(api: Api) -> None:
     now = api.clock()
     with api.sf.begin() as s:
-        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", max_turns=4))
+        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", chat_prompt="c", max_turns=4))
         s.add(Email(id="e1", attempts=0))
         s.flush()
         s.add(AgentRun(id=7, trigger="webhook", email_id="e1", config_id=1, status="done", started_at=now))

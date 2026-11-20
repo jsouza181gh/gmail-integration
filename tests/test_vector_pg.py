@@ -64,3 +64,55 @@ def test_search_ranks_nearest_first(pg: sessionmaker[Session]) -> None:
     mine = [h for h in hits if h.id in ("vectest-0", "vectest-1") or h.title == "Boleto"]
     assert mine[0].kind == "attachment" and mine[0].title == "Boleto"
     assert mine[0].score > mine[-1].score
+
+
+def test_retriever_merges_vector_and_keyword_pg(pg: sessionmaker[Session]) -> None:
+    from collections.abc import Sequence
+
+    from src.chat.retrieval import DbRetriever
+    from src.indexing.store import IndexStore
+    from src.llm.types import CallContext, EmbedInput, EmbedResult, EmbedTask
+
+    class OneVector:
+        def embed(
+            self,
+            inputs: Sequence[EmbedInput],
+            *,
+            purpose: str,
+            task: EmbedTask,
+            context: CallContext = CallContext(),
+        ) -> EmbedResult:
+            assert task == "RETRIEVAL_QUERY" and purpose == "chat_search"
+            return EmbedResult(vectors=(unit(1),), model="m")
+
+    with pg.begin() as s:
+        s.get_one(Email, "vectest-0").subject = "Boleto vectestzz"
+    hits = DbRetriever(IndexStore(pg), OneVector()).search("vectestzz", 2, CallContext())
+    ids = [h.id for h in hits]
+    assert ids[0] == "vectest-1" and hits[0].score > 0.99
+    assert "vectest-0" in ids
+
+
+def test_retriever_falls_back_to_keyword_when_embedding_fails_pg(pg: sessionmaker[Session]) -> None:
+    from collections.abc import Sequence
+
+    from src.chat.retrieval import DbRetriever
+    from src.indexing.store import IndexStore
+    from src.llm.errors import LLMExhaustedError
+    from src.llm.types import CallContext, EmbedInput, EmbedResult, EmbedTask
+
+    class QuotaGone:
+        def embed(
+            self,
+            inputs: Sequence[EmbedInput],
+            *,
+            purpose: str,
+            task: EmbedTask,
+            context: CallContext = CallContext(),
+        ) -> EmbedResult:
+            raise LLMExhaustedError("cota esgotada", kinds=("rate",))
+
+    with pg.begin() as s:
+        s.get_one(Email, "vectest-0").subject = "Boleto vectestyy"
+    hits = DbRetriever(IndexStore(pg), QuotaGone()).search("vectestyy", 2, CallContext())
+    assert [h.id for h in hits] == ["vectest-0"]

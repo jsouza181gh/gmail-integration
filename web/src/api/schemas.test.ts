@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import * as cf from '../../test/chatFixtures'
 import * as fx from '../../test/fixtures'
 import * as s from './schemas'
 
@@ -30,6 +31,8 @@ describe('schemas', () => {
     ['SecurityEvent', s.SecurityEvent, fx.securityEvent],
     ['Notification', s.Notification, fx.notification],
     ['Taxonomy', s.Taxonomy, fx.taxonomy],
+    ['Conversation', s.Conversation, cf.conversation],
+    ['Turn (every card kind)', s.Turn, cf.turn({ status: 'done', cards: [cf.ruleCard, cf.preferenceCard, cf.promoteCard, cf.policyCard, cf.actionsCard, cf.emailsCard, cf.documentsCard] })],
   ]
 
   test.each(cases)('accepts the %s fixture', (_name, schema, fixture) => {

@@ -81,6 +81,8 @@ class Prompt(Schema):
     purpose: str
     messages: tuple[ChatMessage, ...]
     context: CallContext = CallContext()
+    # cap on attempts for this call (interactive callers fail fast); None = gateway default
+    attempts: int | None = None
 
 
 class TokenUsage(Schema):

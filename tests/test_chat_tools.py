@@ -1,0 +1,210 @@
+"""Chat card tools: they only ever write cards; the user's click applies them."""
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
+
+from src.agent.actions import ActionService
+from src.agent.approvals import ApprovalService
+from src.agent.context import ChatScope
+from src.agent.executor import ToolExecution, ToolExecutor
+from src.agent.policy import PolicyResolver
+from src.agent.rules import RuleAdmin
+from src.agent.state import AgentState
+from src.agent.tools import build_registry
+from src.agent.trail import Trail
+from src.chat.retrieval import DbDocCatalog, DbEmailLookup
+from src.chat.store import ChatStore
+from src.db.models import (
+    AgentConfig,
+    Attachment,
+    AutomationRule,
+    KbEntry,
+    SuggestedAction,
+    ToolPolicy,
+)
+from src.jobs.store import JobStore
+from src.llm.types import JsonArgs, ToolCallRequest
+from tests.agent_fakes import FakeTaxonomy, make_ctx
+from tests.chat_fakes import add_email
+
+
+def _run(trail: Trail, name: str, args: JsonArgs | None, deps: dict[str, object]) -> ToolExecution:
+    run = trail.start_run("chat", None, 1)
+    ctx = make_ctx(run_id=run, trigger="chat", email_id=None, extra=deps)
+    call = ToolCallRequest(id="c1", name=name, args=args or {})
+    return ToolExecutor(build_registry(), trail).execute(
+        call, ctx, AgentState(emails={}), source="model"
+    )
+
+
+class ChatWorld:
+    """Real DB adapters for the card tools, plus one chat turn to attach cards to."""
+
+    def __init__(self, sf: sessionmaker[Session]) -> None:
+        self.sf = sf
+        jobs = JobStore(sf)
+        self.store = ChatStore(sf)
+        self.rules = RuleAdmin(sf)
+        self.actions = ActionService(sf, jobs, PolicyResolver(sf))
+        self.approvals = ApprovalService(sf, jobs)
+        conv = self.store.create_conversation()
+        self.message_id = self.store.start_turn(conv.id, text="oi").assistant.id
+        self.trail = Trail(sf)
+        self.deps: dict[str, object] = {
+            "chat": ChatScope(conversation_id=conv.id, message_id=self.message_id,
+                              channel="audio"),
+            "cards": self.store,
+            "rules": self.rules,
+            "actions": self.actions,
+            "pending": self.approvals,
+            "lookup": DbEmailLookup(sf),
+            "docs": DbDocCatalog(sf),
+            "taxonomy": FakeTaxonomy(),
+        }
+
+    def run(self, name: str, args: JsonArgs | None = None) -> ToolExecution:
+        return _run(self.trail, name, args, self.deps)
+
+    def cards(self) -> list[str]:
+        return [c.kind for c in self.store.turn(self.message_id).assistant.cards]
+
+    def count(self, model: type[object]) -> int:
+        with self.sf() as s:
+            return s.scalar(select(func.count()).select_from(model)) or 0
+
+    def pending_action(self, email_id: str, kind: str = "trash") -> int:
+        ref = self.actions.propose(email_id, "trash" if kind == "trash" else "archive", "x",
+                                   run_id=None, trigger="webhook")
+        assert ref.action_id is not None
+        return ref.action_id
+
+
+@pytest.fixture
+def w(session_factory: sessionmaker[Session]) -> ChatWorld:
+    with session_factory.begin() as s:
+        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", chat_prompt="c",
+                          max_turns=3))
+    add_email(session_factory, "e1")
+    add_email(session_factory, "e2")
+    add_email(session_factory, "nf", has_document=True)
+    return ChatWorld(session_factory)
+
+
+def test_propose_tools_never_write_config(w: ChatWorld) -> None:
+    rid = w.rules.add(name="arq", action="archive", sender_domain="loja.com")
+    a1 = w.pending_action("e1")
+    calls: list[tuple[str, JsonArgs]] = [
+        ("propose_rule", {"name": "lixo", "action": "trash", "sender_domain": "loja.com"}),
+        ("propose_preference", {"text": "vagas Java não", "scope": "decision"}),
+        ("propose_promotion", {"rule_id": rid}),
+        ("propose_policy", {"target": "archive", "trigger": "webhook", "policy": "auto"}),
+        ("decide_pending", {"action_ids": [a1], "verdict": "approve", "comment": "ok"}),
+    ]
+    for name, args in calls:
+        res = w.run(name, args)
+        assert res.ok, res.message.content
+        assert "aguardando confirmação" in res.message.content
+    assert w.cards() == ["rule", "preference", "promote", "policy", "actions"]
+    assert w.count(AutomationRule) == 1 and w.count(KbEntry) == 0 and w.count(ToolPolicy) == 0
+    with w.sf() as s:
+        assert s.get_one(SuggestedAction, a1).status == "pending"
+    rule = w.rules.get(rid)
+    assert rule is not None and rule.mode == "suggest"
+
+
+def test_propose_rule_counts_affected(w: ChatWorld) -> None:
+    res = w.run("propose_rule", {"name": "lixo", "action": "trash", "sender_domain": "@Loja.com",
+                                 "unless_document": True})
+    assert res.ok and "afeta ~2 e-mail" in res.message.content
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert card.affected == 2 and card.rule is not None
+    assert card.rule.sender_domain == "loja.com" and card.channel == "audio"
+
+
+def test_propose_rule_rejects_unknown_category(w: ChatWorld) -> None:
+    res = w.run("propose_rule", {"name": "x", "action": "archive", "category": "Inexistente"})
+    assert not res.ok and "Promoções" in res.message.content
+    assert w.run("propose_rule", {"name": "x", "action": "archive", "category": "promoções"}).ok
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert card.rule is not None and card.rule.category == "Promoções"
+
+
+def test_propose_rule_needs_a_condition(w: ChatWorld) -> None:
+    assert not w.run("propose_rule", {"name": "x", "action": "archive"}).ok
+    assert w.cards() == []
+
+
+def test_propose_promotion_refuses_block_sender(w: ChatWorld) -> None:
+    rid = w.rules.add(name="bloq", action="block_sender", sender_domain="spam.com")
+    assert not w.run("propose_promotion", {"rule_id": rid}).ok
+    assert w.cards() == []
+
+
+def test_propose_policy_refuses_auto_block_sender(w: ChatWorld) -> None:
+    res = w.run("propose_policy", {"target": "block_sender", "trigger": "chat", "policy": "auto"})
+    assert not res.ok and w.cards() == []
+
+
+def test_decide_pending_drops_decided_ids(w: ChatWorld) -> None:
+    a1, a2 = w.pending_action("e1"), w.pending_action("e2")
+    w.approvals.reject([a1])
+    assert w.run("decide_pending", {"action_ids": [a1, a2], "verdict": "reject"}).ok
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert [i.action_id for i in card.items] == [a2] and card.verdict == "reject"
+    assert not w.run("decide_pending", {"action_ids": [a1], "verdict": "reject"}).ok
+
+
+def test_list_pending_summarizes_and_cards(w: ChatWorld) -> None:
+    empty = w.run("list_pending")
+    assert empty.ok and "nenhuma" in empty.message.content and w.cards() == []
+    w.pending_action("e1")
+    w.pending_action("e2", "archive")
+    res = w.run("list_pending")
+    assert res.ok and "2 pendente" in res.message.content and w.cards() == ["actions"]
+
+
+def test_propose_email_action_makes_actions_card(w: ChatWorld) -> None:
+    res = w.run("propose_email_action", {"email_id": "e1", "kind": "archive",
+                                         "reason": "pedido do usuário"})
+    assert res.ok and w.cards() == ["actions"]
+    assert not w.run("propose_email_action", {"email_id": "zz", "kind": "archive",
+                                              "reason": "x"}).ok
+
+
+def test_show_emails_and_share_documents(w: ChatWorld) -> None:
+    with w.sf.begin() as s:
+        s.add_all([
+            Attachment(email_id="e1", part_id="1", filename="b.pdf", mime_type="application/pdf",
+                       size=1, status="done", title="Boleto"),
+            Attachment(email_id="e1", part_id="2", filename="c.pdf", mime_type="application/pdf",
+                       size=1, status="pending"),
+        ])
+    assert w.run("show_emails", {"email_ids": ["e1", "zz"]}).ok
+    res = w.run("share_documents", {"attachment_ids": [1, 2]})
+    assert res.ok and "#2" in res.message.content  # reported as unavailable
+    emails, docs = w.store.turn(w.message_id).assistant.cards
+    assert [i.email_id for i in emails.items] == ["e1"]
+    assert [i.attachment_id for i in docs.items] == [1]
+    assert not w.run("share_documents", {"attachment_ids": [2]}).ok
+
+
+def test_card_tools_need_a_chat_turn(w: ChatWorld) -> None:
+    deps = {k: v for k, v in w.deps.items() if k != "chat"}
+    res = _run(w.trail, "propose_preference", {"text": "x", "scope": "decision"}, deps)
+    assert not res.ok and w.cards() == []
+
+
+def test_chat_registry_offers_only_chat_tools() -> None:
+    reg = build_registry()
+    webhook = {t.name for t in reg.for_model("webhook")}
+    chat = {t.name for t in reg.for_model("chat")}
+    assert webhook == {"get_email_body", "propose_action"}
+    assert chat == {
+        "list_emails", "list_labels", "search_mail", "read_email", "find_documents",
+        "list_rules", "sender_stats", "show_emails", "share_documents", "list_pending",
+        "decide_pending", "propose_email_action", "propose_rule", "propose_preference",
+        "propose_promotion", "propose_policy",
+    }
+    for name in ("classify_email", "get_email_body", "sender_history", "propose_action"):
+        entry = reg.get(name)
+        assert entry is not None and entry.contexts == frozenset({"webhook"})

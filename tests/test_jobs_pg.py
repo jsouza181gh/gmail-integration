@@ -42,3 +42,28 @@ def test_enqueue_conflict_reports_false_on_postgres(pg: sessionmaker[Session]) -
     jobs = JobStore(pg)
     assert jobs.enqueue(ProcessEmailJob(email_id="pgtest-a")) is True
     assert jobs.enqueue(ProcessEmailJob(email_id="pgtest-a")) is False
+
+
+def test_two_lanes_skip_locked(pg: sessionmaker[Session]) -> None:
+    from datetime import UTC, datetime
+
+    from src.jobs.types import ChatTurnJob
+
+    now = datetime.now(UTC)
+    with pg.begin() as s:
+        s.execute(text("DELETE FROM chat_messages"))
+        s.execute(text("DELETE FROM chat_conversations"))
+        conv = s.execute(text(
+            "INSERT INTO chat_conversations (created_at, updated_at) VALUES (:n, :n) RETURNING id"
+        ), {"n": now}).scalar_one()
+        msg = s.execute(text(
+            "INSERT INTO chat_messages (conversation_id, role, text, input, status, created_at,"
+            " updated_at) VALUES (:c, 'assistant', '', 'text', 'queued', :n, :n) RETURNING id"
+        ), {"c": conv, "n": now}).scalar_one()
+    jobs = JobStore(pg)
+    jobs.enqueue(ProcessEmailJob(email_id="pgtest-a"))
+    jobs.enqueue(ChatTurnJob(message_id=msg))
+    main = jobs.claim("main", exclude=frozenset({"chat_turn"}))
+    chat = jobs.claim("chat", kinds=frozenset({"chat_turn"}))
+    assert main is not None and main.payload.kind == "process_email"
+    assert chat is not None and chat.payload == ChatTurnJob(message_id=msg)

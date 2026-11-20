@@ -5,6 +5,7 @@ summary) or after `max_turns` model calls. LLM failures close the step and
 propagate: the caller decides whether the run fails.
 """
 import json
+from collections.abc import Callable
 from typing import Literal
 
 from src.agent.context import AgentContext
@@ -31,8 +32,15 @@ class AgentLoop:
         self.caller = caller
 
     def run(
-        self, ctx: AgentContext, state: AgentState, prompt: Prompt, *, max_turns: int
+        self,
+        ctx: AgentContext,
+        state: AgentState,
+        prompt: Prompt,
+        *,
+        max_turns: int,
+        on_tool: Callable[[str], None] | None = None,
     ) -> LoopResult:
+        """`on_tool` hears each tool name before it runs (chat progress)."""
         messages = list(prompt.messages)
         tools = self.executor.registry.for_model(ctx.run.trigger)
         seen: set[str] = set()
@@ -62,6 +70,8 @@ class AgentLoop:
                 )
             )
             for call in turn.tool_calls:
+                if on_tool is not None:
+                    on_tool(call.name)
                 sig = _signature(call)
                 if sig in seen:
                     result = self.executor.refuse(

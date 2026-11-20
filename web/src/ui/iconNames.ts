@@ -36,3 +36,7 @@ export type IconName =
   | 'clock'
   | 'star'
   | 'mailopen'
+  | 'mic'
+  | 'arrowup'
+  | 'square'
+  | 'play'

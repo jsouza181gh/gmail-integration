@@ -18,6 +18,7 @@ TABLES = {
     "email_embeddings", "attachments",
     "users", "recovery_codes", "auth_sessions", "login_failures", "ip_blocks",
     "security_events", "app_settings", "config_audit",
+    "chat_conversations", "chat_messages", "chat_audio", "chat_cards", "chat_card_items",
 }
 EMAIL_COLUMNS = {
     "received_at", "is_relevant", "deadline", "has_document", "ephemeral", "category_set_id",
@@ -85,3 +86,13 @@ def test_seed_agent_config_v1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     with create_engine(url).connect() as c:
         rows = c.execute(text("select version, active, max_turns from agent_configs")).all()
     assert [tuple(r) for r in rows] == [(1, True, 4)]
+
+
+def test_chat_columns_and_seeded_chat_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, url = _upgraded(tmp_path, monkeypatch)
+    insp = inspect(create_engine(url))
+    assert "chat_message_id" in {c["name"] for c in insp.get_columns("jobs")}
+    assert "unless_document" in {c["name"] for c in insp.get_columns("automation_rules")}
+    with create_engine(url).connect() as c:
+        prompts = c.execute(text("select chat_prompt from agent_configs")).scalars().all()
+    assert prompts and all(p and "propose_" in p for p in prompts)

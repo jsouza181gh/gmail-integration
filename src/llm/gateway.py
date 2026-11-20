@@ -10,6 +10,7 @@ import base64
 import math
 import random
 import re
+import threading
 import time
 from collections.abc import Callable, Sequence
 from typing import Literal
@@ -128,7 +129,12 @@ class _QuotaGone(Exception):
 
 
 def _file_block(part: BinaryPart) -> dict[str, str]:
-    kind = "image" if part.mime_type.startswith("image/") else "file"
+    if part.mime_type.startswith("image/"):
+        kind = "image"
+    elif part.mime_type.startswith("audio/"):
+        kind = "audio"
+    else:
+        kind = "file"
     return {
         "type": kind,
         "base64": base64.b64encode(part.data).decode("ascii"),
@@ -234,23 +240,42 @@ class LLMGateway:
         self.embed_model = embed_model
         self.mode_source = mode_source  # runtime override (app_settings.llm_mode)
         self._embedder = embedder or GenAIEmbedder()
-        self._chats: dict[str, ChatModelLike] = {}
+        # LangChain clients are not shared across threads (worker lanes).
+        self._local = threading.local()
         self._sleep = sleep
         self._clock = clock
+        self._lock = threading.Lock()
         self._last_call: float | None = None
 
     def _chat(self, model: str) -> ChatModelLike:
-        if model not in self._chats:
-            self._chats[model] = self._chat_factory(model)
-        return self._chats[model]
+        chats: dict[str, ChatModelLike] | None = getattr(self._local, "chats", None)
+        if chats is None:
+            chats = self._local.chats = {}
+        if model not in chats:
+            chats[model] = self._chat_factory(model)
+        return chats[model]
 
     def _pace(self) -> None:
+        """Free mode: reserve the next slot under the lock, then wait for it.
+
+        Several threads (worker lanes) share one gateway, so each caller
+        books its own start time and the RPM holds across all of them.
+        """
         mode = self.mode_source() if self.mode_source is not None else self.mode
-        if mode != "free" or self._last_call is None:
-            return
-        wait = self.min_interval_s - (self._clock() - self._last_call)
+        with self._lock:
+            now = self._clock()
+            if mode != "free" or self._last_call is None:
+                self._last_call = now
+                return
+            wait = max(0.0, self.min_interval_s - (now - self._last_call))
+            self._last_call = now + wait
         if wait > 0:
             self._sleep(wait)
+
+    def _mark_done(self) -> None:
+        with self._lock:
+            now = self._clock()
+            self._last_call = now if self._last_call is None else max(self._last_call, now)
 
     def _backoff(self, kind: ErrorKind, exc: BaseException, attempt: int, model: str) -> None:
         exp = min(BACKOFF_BASE_S * 2 ** attempt, BACKOFF_MAX_S)
@@ -291,15 +316,17 @@ class LLMGateway:
         rotation = tuple(models or self.models)
         last_exc: BaseException | None = None
         kinds: list[ErrorKind] = []
+        budget = min(prompt.attempts or self.max_attempts, self.max_attempts)
 
-        for attempt in range(self.max_attempts):
+        for attempt in range(budget):
             model = rotation[attempt % len(rotation)]
             self._pace()
             started = self._clock()
             try:
                 answer = call(model)
             except (Exception, ValidationError) as exc:  # noqa: BLE001 - classified below
-                self._last_call = self._clock()
+                self._mark_done()
+                ended = self._clock()
                 last_exc = exc
                 kind = _error_kind(exc)
                 kinds.append(kind)
@@ -310,7 +337,7 @@ class LLMGateway:
                         model=model,
                         attempt=attempt + 1,
                         status="error",
-                        latency_ms=int((self._last_call - started) * 1000),
+                        latency_ms=int((ended - started) * 1000),
                         usage=bad.usage if bad else TokenUsage(),
                         error_kind=kind,
                         error=f"{type(exc).__name__}: {exc}"[:ERROR_TEXT_MAX],
@@ -327,14 +354,15 @@ class LLMGateway:
                     raise LLMExhaustedError(str(gone), kinds=("rate",)) from exc
                 continue
 
-            self._last_call = self._clock()
+            self._mark_done()
+            ended = self._clock()
             self._record(
                 CallRecord(
                     purpose=prompt.purpose,
                     model=model,
                     attempt=attempt + 1,
                     status="ok",
-                    latency_ms=int((self._last_call - started) * 1000),
+                    latency_ms=int((ended - started) * 1000),
                     usage=answer.usage,
                     error_kind=None,
                     error=None,
@@ -346,7 +374,7 @@ class LLMGateway:
             return answer.value, model, answer.usage
 
         raise LLMExhaustedError(
-            f"esgotou {self.max_attempts} tentativas: {last_exc}", kinds=tuple(kinds)
+            f"esgotou {budget} tentativas: {last_exc}", kinds=tuple(kinds)
         ) from last_exc
 
     def generate_structured[T: BaseModel](

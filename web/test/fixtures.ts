@@ -213,6 +213,7 @@ export const rule: Rule = {
   sender_domain: 'lojavertice.com.br',
   category: null,
   subject_contains: null,
+  unless_document: false,
   action: 'trash',
   mode: 'suggest',
   active: true,
@@ -238,6 +239,7 @@ const config3 = {
   version: 3,
   active: true,
   decide_prompt: 'Você decide…',
+  chat_prompt: 'Você é o assistente do Gmail…',
   max_turns: 4,
   created_at: '2026-11-18T10:00:00Z',
 }
@@ -246,7 +248,7 @@ export const configs: ConfigsOut = {
   active: config3,
   versions: [
     config3,
-    { id: 2, version: 2, active: false, decide_prompt: 'Antigo', max_turns: 4, created_at: '2026-11-17T10:00:00Z' },
+    { id: 2, version: 2, active: false, decide_prompt: 'Antigo', chat_prompt: 'Chat antigo', max_turns: 4, created_at: '2026-11-17T10:00:00Z' },
   ],
 }
 

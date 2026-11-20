@@ -22,7 +22,7 @@ from tests.agent_fakes import make_ctx, make_email
 @pytest.fixture
 def sf(session_factory: sessionmaker[Session]) -> sessionmaker[Session]:
     with session_factory.begin() as s:
-        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", max_turns=3))
+        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", chat_prompt="c", max_turns=3))
         s.add(Email(id="a", sender="Loja <ofertas@loja.com>", attempts=0, category="Promoções"))
     return session_factory
 
