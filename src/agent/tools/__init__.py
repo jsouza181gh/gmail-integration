@@ -19,7 +19,7 @@ from src.agent.tools.chat_cards import (
     ShareCtx,
     decide_pending,
     list_pending,
-    propose_email_action,
+    propose_email_actions,
     propose_policy,
     propose_preference,
     propose_promotion,
@@ -73,7 +73,7 @@ SLICES: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "share_documents": (ShareCtx, NoState),
     "list_pending": (PendingCtx, NoState),
     "decide_pending": (PendingCtx, NoState),
-    "propose_email_action": (ProposeActionCtx, NoState),
+    "propose_email_actions": (ProposeActionCtx, NoState),
     "propose_rule": (RuleCardCtx, NoState),
     "propose_preference": (CardCtx, NoState),
     "propose_promotion": (PromoteCtx, NoState),
@@ -215,9 +215,10 @@ def build_registry() -> Registry:
             contexts=CHAT,
         ),
         AgentTool(
-            propose_email_action,
+            propose_email_actions,
             context_of=lambda c: ProposeActionCtx(
-                cards=c.cards, chat=chat_of(c), actions=c.actions, lookup=c.lookup, run=c.run
+                cards=c.cards, chat=chat_of(c), actions=c.actions, lookup=c.lookup, mail=c.mail,
+                run=c.run,
             ),
             state_of=_no_state,
             contexts=CHAT,

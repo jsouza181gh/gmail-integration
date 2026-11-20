@@ -166,12 +166,56 @@ def test_list_pending_summarizes_and_cards(w: ChatWorld) -> None:
     assert res.ok and "2 pendente" in res.message.content and w.cards() == ["actions"]
 
 
-def test_propose_email_action_makes_actions_card(w: ChatWorld) -> None:
-    res = w.run("propose_email_action", {"email_id": "e1", "kind": "archive",
-                                         "reason": "pedido do usuário"})
-    assert res.ok and w.cards() == ["actions"]
-    assert not w.run("propose_email_action", {"email_id": "zz", "kind": "archive",
-                                              "reason": "x"}).ok
+def test_batch_one_card_for_many(w: ChatWorld) -> None:
+    for i in range(3, 6):
+        add_email(w.sf, f"e{i}")
+    res = w.run("propose_email_actions", {"kind": "archive", "reason": "pedido do usuário",
+                                          "email_ids": ["e1", "e2", "e3", "e4", "e5"]})
+    assert res.ok and "archive em 5 e-mail(s)" in res.message.content
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert card.kind == "actions" and len(card.items) == 5
+
+
+def test_batch_mixed_outcomes(w: ChatWorld) -> None:
+    w.pending_action("e2")
+    res = w.run("propose_email_actions", {"kind": "trash", "reason": "lixo",
+                                          "email_ids": ["e1", "e2", "gone"]})
+    text = res.message.content
+    assert res.ok and "trash em 2 e-mail(s)" in text
+    assert "já pendentes: 1" in text and "não existem mais no Gmail: 1" in text
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert len(card.items) == 2
+
+
+def test_batch_denied_by_policy_is_counted(w: ChatWorld) -> None:
+    with w.sf.begin() as s:
+        s.add(ToolPolicy(target="trash", trigger="chat", policy="deny"))
+    res = w.run("propose_email_actions", {"kind": "trash", "reason": "lixo",
+                                          "email_ids": ["e1", "e2"]})
+    assert not res.ok and "negados pela política: 2" in res.message.content
+    assert w.cards() == []
+
+
+def test_batch_by_gmail_query_caps_at_50(w: ChatWorld) -> None:
+    w.mail.items = {f"q{i}": spam_item(f"q{i}") for i in range(120)}
+    w.mail.page_size = 40
+    res = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
+                                          "gmail_query": "in:spam from:googlealerts-noreply@google.com"})
+    assert res.ok and "trash em 50 e-mail(s)" in res.message.content
+    assert w.mail.queries[0].include_spam_trash is True
+    assert w.count(SuggestedAction) == 50
+
+
+def test_batch_requires_exactly_one_source(w: ChatWorld) -> None:
+    both = w.run("propose_email_actions", {"kind": "trash", "reason": "x", "email_ids": ["e1"],
+                                           "gmail_query": "in:spam"})
+    neither = w.run("propose_email_actions", {"kind": "trash", "reason": "x"})
+    assert not both.ok and not neither.ok
+    assert "informe email_ids ou gmail_query" in neither.message.content
+
+
+def test_propose_email_action_is_gone() -> None:
+    assert build_registry().get("propose_email_action") is None
 
 
 def test_show_emails_and_share_documents(w: ChatWorld) -> None:
@@ -205,7 +249,7 @@ def test_chat_registry_offers_only_chat_tools() -> None:
     assert chat == {
         "list_emails", "list_labels", "search_mail", "read_email", "find_documents",
         "list_rules", "sender_stats", "show_emails", "share_documents", "list_pending",
-        "decide_pending", "propose_email_action", "propose_rule", "propose_preference",
+        "decide_pending", "propose_email_actions", "propose_rule", "propose_preference",
         "propose_promotion", "propose_policy",
     }
     for name in ("classify_email", "get_email_body", "sender_history", "propose_action"):

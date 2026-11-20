@@ -157,7 +157,7 @@ TOOL_LABELS: dict[str, str] = {
     "share_documents": "preparando o download…",
     "list_pending": "olhando as aprovações…",
     "decide_pending": "preparando a decisão…",
-    "propose_email_action": "preparando a sugestão…",
+    "propose_email_actions": "preparando as sugestões…",
     "propose_rule": "montando a regra…",
     "propose_preference": "anotando a preferência…",
     "propose_promotion": "preparando a promoção…",

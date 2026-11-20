@@ -38,13 +38,18 @@ class SpamMail:
     def __init__(self, items: Sequence[MailItem] = ()) -> None:
         self.items = {i.id: i for i in items}
         self.queries: list[MailQuery] = []
+        self.page_size = 100
 
     def item(self, email_id: str) -> MailItem | None:
         return self.items.get(email_id)
 
     def list_messages(self, query: MailQuery) -> MailPage:
         self.queries.append(query)
-        return MailPage(items=tuple(self.items.values()), next_page_token=None,
+        start = int(query.page_token or 0)
+        size = min(self.page_size, query.max_results)
+        page = list(self.items.values())[start:start + size]
+        more = start + size < len(self.items)
+        return MailPage(items=tuple(page), next_page_token=str(start + size) if more else None,
                         result_size_estimate=len(self.items))
 
     def get_body(self, email_id: str) -> str:

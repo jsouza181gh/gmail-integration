@@ -203,7 +203,7 @@ EXPECTED_SLICES = {
     "share_documents": ({"cards", "chat", "docs"}, set()),
     "list_pending": ({"cards", "chat", "pending"}, set()),
     "decide_pending": ({"cards", "chat", "pending"}, set()),
-    "propose_email_action": ({"cards", "chat", "actions", "lookup", "run"}, set()),
+    "propose_email_actions": ({"cards", "chat", "actions", "lookup", "run", "mail"}, set()),
     "propose_rule": ({"cards", "chat", "rules", "taxonomy"}, set()),
     "propose_preference": ({"cards", "chat"}, set()),
     "propose_promotion": ({"cards", "chat", "rules"}, set()),
