@@ -74,3 +74,49 @@ def test_record_fired_counts(session_factory: sessionmaker[Session]) -> None:
 def test_rule_without_conditions_rejected_by_db(session_factory: sessionmaker[Session]) -> None:
     with pytest.raises(IntegrityError):
         _add(session_factory)
+
+
+def test_condition_unless_document() -> None:
+    from src.agent.rules import RuleCondition
+
+    cond = RuleCondition(sender_domain="loja.com", unless_document=True)
+    assert cond.matches("Loja <a@loja.com>", "x", None, False)
+    assert cond.matches("Loja <a@loja.com>", "x", None, None)
+    assert not cond.matches("Loja <a@loja.com>", "x", None, True)
+    assert not RuleCondition(category="Promoções").matches("a@b.com", "x", None, False)
+    assert not RuleCondition().has_condition()
+    assert RuleCondition(subject_contains="off").has_condition()
+
+
+def test_existing_counts_and_caps(session_factory: sessionmaker[Session]) -> None:
+    from src.agent.rules import RuleCondition
+    from tests.chat_fakes import add_email
+
+    for i in range(1, 6):
+        add_email(session_factory, f"e{i}", received_day=i)
+    add_email(session_factory, "nf", has_document=True, received_day=9)
+    add_email(session_factory, "other", sender="x@outra.com", received_day=8)
+    engine = RuleEngine(session_factory)
+    cond = RuleCondition(sender_domain="loja.com", unless_document=True)
+    ids, total = engine.existing(cond, 3)
+    assert total == 5 and ids == ["e5", "e4", "e3"]
+    assert engine.existing(cond, 0) == ([], 5)
+    assert engine.existing(RuleCondition(category="promoções"), 0)[1] == 7
+
+
+def test_engine_match_respects_unless_document(session_factory: sessionmaker[Session]) -> None:
+    _add(session_factory, sender_domain="loja.com", unless_document=True)
+    engine = RuleEngine(session_factory)
+    assert len(engine.match(make_email("a"), CLS)) == 1
+    with_doc = CLS.model_copy(update={"has_document": True})
+    assert engine.match(make_email("a"), with_doc) == ()
+
+
+def test_rule_admin_add_unless_document(session_factory: sessionmaker[Session]) -> None:
+    from src.agent.rules import RuleAdmin
+
+    admin = RuleAdmin(session_factory)
+    rid = admin.add(name="lixo", action="trash", sender_domain="loja.com", unless_document=True,
+                    source="chat")
+    row = admin.get(rid)
+    assert row is not None and row.unless_document and row.mode == "suggest"

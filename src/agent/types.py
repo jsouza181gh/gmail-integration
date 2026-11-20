@@ -1,6 +1,8 @@
 """Vocabulary shared by the agent runtime, its ports and its tools."""
 from datetime import datetime
-from typing import Literal, get_args
+from typing import Annotated, Literal, get_args
+
+from pydantic import Field
 
 from src.llm.types import Schema
 
@@ -86,3 +88,65 @@ class LabelInfo(Schema):
     id: str
     name: str
     type: str | None
+
+
+# --- chat cards ---------------------------------------------------------------
+# What a chat tool hands to the card sink; the user confirms or cancels it.
+
+Verdict = Literal["approve", "reject"]
+KbScopeName = Literal["classification", "decision"]
+ChatChannel = Literal["chat", "audio"]  # how the user spoke in the turn
+
+
+class RuleDraft(Schema):
+    kind: Literal["rule"] = "rule"
+    name: str
+    action: ActionKind
+    sender_address: str | None = None
+    sender_domain: str | None = None
+    category: str | None = None
+    subject_contains: str | None = None
+    unless_document: bool = False
+    affected: int
+
+
+class PreferenceDraft(Schema):
+    kind: Literal["preference"] = "preference"
+    scope: KbScopeName
+    text: str
+
+
+class PromoteDraft(Schema):
+    kind: Literal["promote"] = "promote"
+    rule_id: int
+
+
+class PolicyDraft(Schema):
+    kind: Literal["policy"] = "policy"
+    target: PolicyTarget
+    trigger: Trigger
+    policy: PolicyDecision
+
+
+class ActionsDraft(Schema):
+    kind: Literal["actions"] = "actions"
+    action_ids: tuple[int, ...]
+    verdict: Verdict | None = None
+    comment: str | None = None
+
+
+class EmailsDraft(Schema):
+    kind: Literal["emails"] = "emails"
+    email_ids: tuple[str, ...]
+
+
+class DocumentsDraft(Schema):
+    kind: Literal["documents"] = "documents"
+    attachment_ids: tuple[int, ...]
+
+
+CardDraft = Annotated[
+    RuleDraft | PreferenceDraft | PromoteDraft | PolicyDraft | ActionsDraft | EmailsDraft
+    | DocumentsDraft,
+    Field(discriminator="kind"),
+]
