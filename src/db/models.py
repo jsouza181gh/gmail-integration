@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -207,6 +208,7 @@ class AgentConfig(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     decide_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    chat_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     max_turns: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -295,6 +297,10 @@ class AutomationRule(Base):
     sender_domain: Mapped[str | None] = mapped_column(String(255))
     category: Mapped[str | None] = mapped_column(String(64))
     subject_contains: Mapped[str | None] = mapped_column(String(200))
+    # "exceto quando tiver documento": skips emails flagged has_document
+    unless_document: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -392,6 +398,10 @@ class Job(Base):
             "kind <> 'backfill_page' OR (run_id IS NOT NULL AND page_no IS NOT NULL)",
             name="ck_jobs_backfill_page_has_page",
         ),
+        CheckConstraint(
+            "kind <> 'chat_turn' OR chat_message_id IS NOT NULL",
+            name="ck_jobs_chat_turn_has_message",
+        ),
         Index("ix_jobs_claim", "status", "priority", "run_after"),
     )
 
@@ -408,6 +418,7 @@ class Job(Base):
     attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))
     run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"))
     page_no: Mapped[int | None] = mapped_column(Integer)
+    chat_message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"))
     last_error: Mapped[str | None] = mapped_column(Text)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_by: Mapped[str | None] = mapped_column(String(64))
@@ -583,3 +594,125 @@ class ConfigAudit(Base):
     before: Mapped[str | None] = mapped_column(Text)
     after: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# --- chat ------------------------------------------------------------------
+
+class ChatConversation(Base):
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatMessage(Base):
+    """One turn side: the user's words (text or audio) or the agent's answer."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (Index("ix_chat_messages_conversation", "conversation_id", "id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_conversations.id"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    input: Mapped[str] = mapped_column(String(8), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    progress: Mapped[str | None] = mapped_column(String(120))
+    error: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id"))
+    reply_to: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatAudio(Base):
+    """The original recording of a voice turn."""
+
+    __tablename__ = "chat_audio"
+
+    message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id"), primary_key=True)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatCard(Base):
+    """Something the agent shows or proposes in a turn; typed columns per kind."""
+
+    __tablename__ = "chat_cards"
+    __table_args__ = (
+        CheckConstraint(
+            "kind <> 'rule' OR (action IS NOT NULL AND rule_name IS NOT NULL AND ("
+            "sender_address IS NOT NULL OR sender_domain IS NOT NULL"
+            " OR category IS NOT NULL OR subject_contains IS NOT NULL))",
+            name="ck_chat_cards_rule",
+        ),
+        CheckConstraint(
+            "kind <> 'preference' OR (kb_text IS NOT NULL AND kb_scope IS NOT NULL)",
+            name="ck_chat_cards_preference",
+        ),
+        CheckConstraint("kind <> 'promote' OR rule_id IS NOT NULL", name="ck_chat_cards_promote"),
+        CheckConstraint(
+            "kind <> 'policy' OR (policy_target IS NOT NULL AND policy_trigger IS NOT NULL"
+            " AND policy_value IS NOT NULL)",
+            name="ck_chat_cards_policy",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    channel: Mapped[str] = mapped_column(String(8), nullable=False)
+    rule_name: Mapped[str | None] = mapped_column(String(120))
+    sender_address: Mapped[str | None] = mapped_column(String(320))
+    sender_domain: Mapped[str | None] = mapped_column(String(255))
+    category: Mapped[str | None] = mapped_column(String(64))
+    subject_contains: Mapped[str | None] = mapped_column(String(200))
+    unless_document: Mapped[bool | None] = mapped_column(Boolean)
+    action: Mapped[str | None] = mapped_column(String(32))
+    apply_existing: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    affected: Mapped[int | None] = mapped_column(Integer)
+    kb_scope: Mapped[str | None] = mapped_column(String(32))
+    kb_text: Mapped[str | None] = mapped_column(Text)
+    rule_id: Mapped[int | None] = mapped_column(ForeignKey("automation_rules.id"))
+    policy_target: Mapped[str | None] = mapped_column(String(32))
+    policy_trigger: Mapped[str | None] = mapped_column(String(16))
+    policy_value: Mapped[str | None] = mapped_column(String(16))
+    verdict: Mapped[str | None] = mapped_column(String(16))
+    comment: Mapped[str | None] = mapped_column(Text)
+    created_rule_id: Mapped[int | None] = mapped_column(ForeignKey("automation_rules.id"))
+    kb_entry_id: Mapped[int | None] = mapped_column(ForeignKey("kb_entries.id"))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChatCardItem(Base):
+    """One email, suggestion or document listed on a card."""
+
+    __tablename__ = "chat_card_items"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN email_id IS NULL THEN 0 ELSE 1 END)"
+            " + (CASE WHEN action_id IS NULL THEN 0 ELSE 1 END)"
+            " + (CASE WHEN attachment_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_chat_card_items_one_target",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("chat_cards.id"), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
+    action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
+    attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))

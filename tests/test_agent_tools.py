@@ -41,7 +41,7 @@ class FakeMail:
 @pytest.fixture
 def trail(session_factory: sessionmaker[Session]) -> Trail:
     with session_factory.begin() as s:
-        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", max_turns=3))
+        s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", chat_prompt="c", max_turns=3))
     return Trail(session_factory)
 
 
