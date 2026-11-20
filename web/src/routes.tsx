@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router'
+import Agente from './pages/Agente'
 import Aprovacoes from './pages/Aprovacoes'
 import Caixa from './pages/Caixa'
 import Chat from './pages/Chat'
@@ -29,7 +30,7 @@ export function AppRoutes() {
         <Route path="aprovacoes" element={<Aprovacoes />} />
         <Route path="documentos" element={<Documentos />} />
         <Route path="chat" element={<Chat />} />
-        <Route path="agente" element={<Soon title="Agente" />} />
+        <Route path="agente" element={<Agente />} />
         <Route path="execucoes" element={<Execucoes />} />
         <Route path="seguranca" element={<Soon title="Segurança" />} />
       </Route>

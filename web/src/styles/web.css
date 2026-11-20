@@ -97,3 +97,10 @@ button.ia-bottomnav__item { border: 0; background: none; cursor: pointer; }
 .usage-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; padding: 8px 4px 0; border-bottom: 1px solid var(--line); }
 .usage-chart__bar { flex: 1 1 0; background: var(--raised); border-radius: 6px 6px 0 0; }
 .usage-chart__bar--now { background: var(--accent); }
+
+/* Agente */
+.rule-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: end; }
+.kb-form { flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.policy-select { width: 180px; height: 36px; }
+.prompt-box { min-height: 220px; resize: vertical; padding: 12px; border-radius: 12px; border: 0; background: var(--bg); color: var(--ink); font: 400 13px/20px var(--font-mono); }
+.history-when { width: 120px; flex: none; }
