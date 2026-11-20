@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useHotkey } from '../lib/hotkeys'
 import { Icon } from './Icon'
 
@@ -28,14 +28,17 @@ export function useToast(): ToastApi {
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [current, setCurrent] = useState<Current | null>(null)
+  const seq = useRef(0)
 
   const show = useCallback((text: string, opts: ShowOptions = {}) => {
-    setCurrent((prev) => ({ id: (prev?.id ?? 0) + 1, text, undo: opts.undo, ms: opts.ms ?? (opts.undo ? 5000 : 4000) }))
+    seq.current += 1
+    setCurrent({ id: seq.current, text, undo: opts.undo, ms: opts.ms ?? (opts.undo ? 5000 : 4000) })
   }, [])
 
   useEffect(() => {
     if (!current) return
-    const timer = setTimeout(() => setCurrent(null), current.ms)
+    // Hide only this toast: a newer one may already have replaced it.
+    const timer = setTimeout(() => setCurrent((c) => (c?.id === current.id ? null : c)), current.ms)
     return () => clearTimeout(timer)
   }, [current])
 
