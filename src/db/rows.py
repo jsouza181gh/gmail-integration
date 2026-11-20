@@ -36,6 +36,7 @@ class EmailRow(Row):
     has_document: bool | None
     ephemeral: bool | None
     category_set_id: int | None
+    source: str = "inbox"
     updated_at: datetime
 
 

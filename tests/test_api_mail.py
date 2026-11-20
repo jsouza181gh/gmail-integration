@@ -35,6 +35,9 @@ def seed(sf: sessionmaker[Session]) -> None:
                         snippet=f"snip {i}", category=cat, is_relevant=rel, deadline=dl,
                         received_at=T0 - timedelta(hours=i), attempts=0, reason=f"motivo {i}",
                         body=f"corpo {i}"))
+        s.add(Email(id="sp1", sender="Spam <x@spam.com>", subject="spam guardado pelo chat",
+                    snippet="snip spam", is_relevant=True, deadline=date(2026, 11, 21),
+                    received_at=T0, attempts=0, source="chat"))
         s.add(AgentConfig(id=1, version=1, active=True, decide_prompt="p", chat_prompt="c", max_turns=4))
         s.flush()
         s.add(Attachment(email_id="e1", part_id="1", filename="rg.pdf", mime_type="application/pdf",
@@ -126,3 +129,9 @@ def test_approve_enqueues_and_reject_writes_feedback(api: Api) -> None:
 def test_categories(api: Api) -> None:
     cats = api.client.get("/api/categories").json()
     assert len(cats["categories"]) == 11 and len(cats["flags"]) == 4
+
+
+def test_mail_list_hides_chat_rows(api: Api) -> None:
+    c = api.client
+    assert "sp1" not in {e["id"] for e in c.get("/api/emails", params={"limit": 50}).json()["items"]}
+    assert "sp1" not in {e["id"] for e in c.get("/api/emails/relevant").json()}

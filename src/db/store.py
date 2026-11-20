@@ -114,6 +114,12 @@ class Store:
         _insert_ignore(
             s, RunEmail, [{"run_id": run_id, "email_id": i} for i in all_ids]
         )
+        if all_ids:  # a chat-fetched row now seen in the INBOX joins the panel
+            s.execute(
+                update(Email)
+                .where(Email.id.in_(all_ids), Email.source == "chat")
+                .values(source="inbox")
+            )
 
     def ingest(
         self, run_id: int, all_ids: Sequence[str], new_emails: Sequence[MessageSummary]

@@ -93,3 +93,17 @@ def test_set_history_id(store):
     store.init_watch_state("a@b", "100", 1)
     store.set_history_id("150")
     assert store.get_watch_state().history_id == "150"
+
+
+def test_ingest_promotes_chat_row_to_inbox(store):
+    from src.db.models import Email
+
+    with store.sf.begin() as s:
+        s.add(Email(id="sp", sender="spam@x", subject="oferta", attempts=0, source="chat"))
+    run = store.get_or_create_run("q")
+    store.ingest(run.id, ["sp"], [])
+
+    with store.sf() as s:
+        row = s.get(Email, "sp")
+        assert row is not None
+        assert (row.source, row.sender, row.subject) == ("inbox", "spam@x", "oferta")
