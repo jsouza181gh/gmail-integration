@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { expect, test } from 'vitest'
+import * as cf from '../../test/chatFixtures'
 import * as fx from '../../test/fixtures'
 import { server } from '../../test/server'
 import * as api from './endpoints'
@@ -50,4 +51,33 @@ test('setPolicy_puts_target_trigger_policy', async () => {
   )
   await api.setPolicy('archive', 'webhook', 'auto')
   expect(body).toEqual({ target: 'archive', trigger: 'webhook', policy: 'auto' })
+})
+
+
+test('sendAudio_posts_raw_wav', async () => {
+  let type: string | null = null
+  let size = 0
+  server.use(
+    http.post('/api/chat/conversations/3/audio', async ({ request }) => {
+      type = request.headers.get('content-type')
+      size = (await request.arrayBuffer()).byteLength
+      return HttpResponse.json(cf.turn({}, { input: 'audio', text: '' }))
+    }),
+  )
+  const out = await api.sendAudio(3, new Blob([new Uint8Array(100)], { type: 'audio/wav' }))
+  expect(type).toBe('audio/wav')
+  expect(size).toBe(100)
+  expect(out.user.input).toBe('audio')
+})
+
+test('confirmCard_sends_options', async () => {
+  let body: unknown
+  server.use(
+    http.post('/api/chat/cards/11/confirm', async ({ request }) => {
+      body = await request.json()
+      return HttpResponse.json({ ...cf.ruleCard, status: 'confirmed' })
+    }),
+  )
+  expect((await api.confirmCard(11, { apply_existing: true })).status).toBe('confirmed')
+  expect(body).toEqual({ apply_existing: true })
 })

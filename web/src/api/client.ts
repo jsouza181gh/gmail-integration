@@ -6,8 +6,19 @@ type QueryValue = string | number | boolean | undefined
 
 interface Options<S extends z.ZodType | undefined> {
   body?: unknown
+  /** Sent as-is (e.g. an audio Blob) with `contentType`; takes precedence over `body`. */
+  raw?: BodyInit
+  contentType?: string
   query?: Record<string, QueryValue>
   schema?: S
+}
+
+export interface FetchInit {
+  method?: Method
+  body?: BodyInit
+  contentType?: string
+  query?: Record<string, QueryValue>
+  signal?: AbortSignal
 }
 
 const NO_REFRESH = new Set(['/api/auth/login', '/api/auth/2fa', '/api/auth/refresh'])
@@ -36,21 +47,24 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   return url.toString()
 }
 
-async function send(method: Method, path: string, opts: Options<z.ZodType | undefined>): Promise<Response> {
+async function send(path: string, init: FetchInit): Promise<Response> {
+  const method = init.method ?? 'GET'
   const headers: Record<string, string> = {}
-  if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (init.contentType) headers['Content-Type'] = init.contentType
   if (WRITES.has(method)) {
     const token = csrfToken()
     if (token) headers['X-CSRF-Token'] = token
   }
   try {
-    return await fetch(buildUrl(path, opts.query), {
+    return await fetch(buildUrl(path, init.query), {
       method,
       headers,
       credentials: 'same-origin',
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      body: init.body,
+      signal: init.signal,
     })
-  } catch {
+  } catch (err) {
+    if (init.signal?.aborted) throw err
     throw new ApiError(0, OFFLINE)
   }
 }
@@ -58,7 +72,7 @@ async function send(method: Method, path: string, opts: Options<z.ZodType | unde
 // One refresh at a time: the server rotates the refresh token on every use,
 // and reusing an old one revokes the whole session family.
 function refreshOnce(): Promise<boolean> {
-  refreshing ??= send('POST', '/api/auth/refresh', {})
+  refreshing ??= send('/api/auth/refresh', { method: 'POST' })
     .then((r) => r.ok)
     .catch(() => false)
     .finally(() => {
@@ -73,21 +87,33 @@ async function errorFrom(res: Response): Promise<ApiError> {
   return new ApiError(res.status, parsed.success ? parsed.data.detail : fallbackDetail(res.status))
 }
 
+/** fetch with CSRF on writes and one refresh-and-retry on 401 (what `request` builds on). */
+export async function authedFetch(path: string, init: FetchInit = {}): Promise<Response> {
+  let res = await send(path, init)
+  if (res.status === 401 && !NO_REFRESH.has(path)) {
+    // No csrf cookie = never signed in (or already signed out): a refresh would only
+    // be refused by the server and logged as a CSRF security event.
+    if (csrfToken() !== null && (await refreshOnce())) {
+      res = await send(path, init)
+    } else {
+      sessionLost()
+    }
+  }
+  return res
+}
+
 export async function request<S extends z.ZodType | undefined = undefined>(
   method: Method,
   path: string,
   opts: Options<S> = {},
 ): Promise<S extends z.ZodType ? z.infer<S> : void> {
-  let res = await send(method, path, opts)
-  if (res.status === 401 && !NO_REFRESH.has(path)) {
-    // No csrf cookie = never signed in (or already signed out): a refresh would only
-    // be refused by the server and logged as a CSRF security event.
-    if (csrfToken() !== null && (await refreshOnce())) {
-      res = await send(method, path, opts)
-    } else {
-      sessionLost()
-    }
-  }
+  const json = opts.body !== undefined
+  const res = await authedFetch(path, {
+    method,
+    query: opts.query,
+    body: opts.raw ?? (json ? JSON.stringify(opts.body) : undefined),
+    contentType: opts.raw !== undefined ? opts.contentType : json ? 'application/json' : undefined,
+  })
   if (!res.ok) throw await errorFrom(res)
   if (!opts.schema) return undefined as S extends z.ZodType ? z.infer<S> : void
   const parsed = opts.schema.safeParse(await res.json().catch(() => null))

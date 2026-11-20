@@ -182,7 +182,7 @@ test('prompt_tab_saves_a_new_version_and_rolls_back', async () => {
   const state = load()
   const created: unknown[] = []
   let activated = 0
-  const v4: AgentConfig = { id: 4, version: 4, active: true, decide_prompt: 'Prompt novo', max_turns: 5, created_at: '2026-11-19T22:00:00Z' }
+  const v4: AgentConfig = { id: 4, version: 4, active: true, decide_prompt: 'Prompt novo', chat_prompt: 'Chat', max_turns: 5, created_at: '2026-11-19T22:00:00Z' }
   server.use(
     http.post('/api/agent/config', async ({ request }) => {
       created.push(await request.json())
