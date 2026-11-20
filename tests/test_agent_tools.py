@@ -193,6 +193,15 @@ EXPECTED_SLICES = {
     "find_documents": ({"docs"}, set()),
     "list_rules": ({"rules"}, set()),
     "sender_stats": ({"history"}, set()),
+    "show_emails": ({"cards", "chat", "lookup"}, set()),
+    "share_documents": ({"cards", "chat", "docs"}, set()),
+    "list_pending": ({"cards", "chat", "pending"}, set()),
+    "decide_pending": ({"cards", "chat", "pending"}, set()),
+    "propose_email_action": ({"cards", "chat", "actions", "lookup", "run"}, set()),
+    "propose_rule": ({"cards", "chat", "rules", "taxonomy"}, set()),
+    "propose_preference": ({"cards", "chat"}, set()),
+    "propose_promotion": ({"cards", "chat", "rules"}, set()),
+    "propose_policy": ({"cards", "chat"}, set()),
 }
 
 
@@ -207,7 +216,9 @@ def test_tool_slices_are_minimal() -> None:
 def test_registry_offers_per_trigger() -> None:
     reg = build_registry()
     assert {t.name for t in reg.for_model("webhook")} == {"get_email_body", "propose_action"}
-    assert {t.name for t in reg.for_model("chat")} == set(EXPECTED_SLICES) - {"apply_labels"}
+    webhook_only = {"classify_email", "get_email_body", "sender_history", "propose_action",
+                    "apply_labels"}
+    assert {t.name for t in reg.for_model("chat")} == set(EXPECTED_SLICES) - webhook_only
 
 
 def _llm(structured: FakeStructured) -> object:

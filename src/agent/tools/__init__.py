@@ -5,10 +5,28 @@
 """
 from pydantic import BaseModel
 
-from src.agent.context import AgentContext
+from src.agent.context import AgentContext, ChatScope
 from src.agent.registry import AgentTool, Registry, ToolEntry
 from src.agent.state import AgentState, EmailFacts
 from src.agent.tools.act import ActCtx, ActState, propose_action
+from src.agent.tools.chat_cards import (
+    CardCtx,
+    EmailsCtx,
+    PendingCtx,
+    PromoteCtx,
+    ProposeActionCtx,
+    RuleCardCtx,
+    ShareCtx,
+    decide_pending,
+    list_pending,
+    propose_email_action,
+    propose_policy,
+    propose_preference,
+    propose_promotion,
+    propose_rule,
+    share_documents,
+    show_emails,
+)
 from src.agent.tools.chat_read import (
     DocsCtx,
     ReadCtx,
@@ -36,7 +54,6 @@ from src.agent.tools.sender import SenderCtx, SenderState, sender_history
 from src.agent.types import Trigger
 
 WEBHOOK: frozenset[Trigger] = frozenset({"webhook"})
-BOTH: frozenset[Trigger] = frozenset({"webhook", "chat"})
 CHAT: frozenset[Trigger] = frozenset({"chat"})
 
 SLICES: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
@@ -52,6 +69,15 @@ SLICES: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "find_documents": (DocsCtx, NoState),
     "list_rules": (RulesCtx, NoState),
     "sender_stats": (StatsCtx, NoState),
+    "show_emails": (EmailsCtx, NoState),
+    "share_documents": (ShareCtx, NoState),
+    "list_pending": (PendingCtx, NoState),
+    "decide_pending": (PendingCtx, NoState),
+    "propose_email_action": (ProposeActionCtx, NoState),
+    "propose_rule": (RuleCardCtx, NoState),
+    "propose_preference": (CardCtx, NoState),
+    "propose_promotion": (PromoteCtx, NoState),
+    "propose_policy": (CardCtx, NoState),
 }
 
 
@@ -66,6 +92,17 @@ def focus(ctx: AgentContext, state: AgentState) -> EmailFacts:
     return state.emails[focus_id(ctx)]
 
 
+def chat_of(ctx: AgentContext) -> ChatScope:
+    """The chat turn a card tool writes to."""
+    if ctx.chat is None:
+        raise ValueError("esta tool só funciona numa conversa do chat")
+    return ctx.chat
+
+
+def _no_state(c: AgentContext, s: AgentState) -> NoState:
+    return NoState()
+
+
 def build_registry() -> Registry:
     tools: list[ToolEntry] = [
         AgentTool(
@@ -76,14 +113,14 @@ def build_registry() -> Registry:
             state_of=lambda c, s: ClassifyState(
                 email=focus(c, s).email, body=focus(c, s).body
             ),
-            contexts=BOTH,
-            offered=CHAT,  # planned by the webhook flow, chosen by the model in chat
+            contexts=WEBHOOK,
+            offered=frozenset(),  # planned by the webhook flow
         ),
         AgentTool(
             get_email_body,
             context_of=lambda c: BodyCtx(mail=c.mail, email_id=focus_id(c)),
             state_of=lambda c, s: BodyState(body=focus(c, s).body),
-            contexts=BOTH,
+            contexts=WEBHOOK,
         ),
         AgentTool(
             sender_history,
@@ -91,14 +128,14 @@ def build_registry() -> Registry:
             state_of=lambda c, s: SenderState(
                 email_id=focus_id(c), sender=focus(c, s).email.sender
             ),
-            contexts=BOTH,
-            offered=CHAT,
+            contexts=WEBHOOK,
+            offered=frozenset(),  # planned by the webhook flow; chat has sender_stats
         ),
         AgentTool(
             propose_action,
             context_of=lambda c: ActCtx(actions=c.actions, email_id=focus_id(c), run=c.run),
             state_of=lambda c, s: ActState(proposals=s.proposals),
-            contexts=BOTH,
+            contexts=WEBHOOK,
         ),
         AgentTool(
             apply_labels,
@@ -151,6 +188,64 @@ def build_registry() -> Registry:
             sender_stats,
             context_of=lambda c: StatsCtx(history=c.history),
             state_of=lambda c, s: NoState(),
+            contexts=CHAT,
+        ),
+        AgentTool(
+            show_emails,
+            context_of=lambda c: EmailsCtx(cards=c.cards, chat=chat_of(c), lookup=c.lookup),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            share_documents,
+            context_of=lambda c: ShareCtx(cards=c.cards, chat=chat_of(c), docs=c.docs),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            list_pending,
+            context_of=lambda c: PendingCtx(cards=c.cards, chat=chat_of(c), pending=c.pending),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            decide_pending,
+            context_of=lambda c: PendingCtx(cards=c.cards, chat=chat_of(c), pending=c.pending),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            propose_email_action,
+            context_of=lambda c: ProposeActionCtx(
+                cards=c.cards, chat=chat_of(c), actions=c.actions, lookup=c.lookup, run=c.run
+            ),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            propose_rule,
+            context_of=lambda c: RuleCardCtx(
+                cards=c.cards, chat=chat_of(c), rules=c.rules, taxonomy=c.taxonomy
+            ),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            propose_preference,
+            context_of=lambda c: CardCtx(cards=c.cards, chat=chat_of(c)),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            propose_promotion,
+            context_of=lambda c: PromoteCtx(cards=c.cards, chat=chat_of(c), rules=c.rules),
+            state_of=_no_state,
+            contexts=CHAT,
+        ),
+        AgentTool(
+            propose_policy,
+            context_of=lambda c: CardCtx(cards=c.cards, chat=chat_of(c)),
+            state_of=_no_state,
             contexts=CHAT,
         ),
     ]
