@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from src.db.store import Store
 from src.jobs.store import JobStore
-from src.jobs.types import ClaimedJob, ExecuteActionJob, JobKind
+from src.jobs.types import ChatTurnJob, ClaimedJob, ExecuteActionJob, JobKind
 from src.jobs.worker import Handler, Worker
 from src.utils.console import log
 
@@ -60,6 +60,7 @@ def main() -> None:
         ),
     )
     handlers: dict[JobKind, Handler] = {
+        "chat_turn": agent.chat_turn.handle,
         "process_email": runs.guard(agent.process_email.handle),
         "execute_action": agent.execute_action.handle,
         "index_email": indexing.indexer.handle,
@@ -71,6 +72,8 @@ def main() -> None:
         log(f"job {job.id} ({job.payload.kind}) foi para dead-letter: {error[:200]}")
         if isinstance(job.payload, ExecuteActionJob):
             agent.approvals.mark_failed(job.payload.action_id, f"desistiu após retries: {error}")
+        if isinstance(job.payload, ChatTurnJob):
+            agent.chat_store.fail(job.payload.message_id, "Erro interno; tente de novo.")
         alerts.alert(
             "job_dead",
             f"job {job.id} ({job.payload.kind}) desistiu após {job.attempts} tentativas",

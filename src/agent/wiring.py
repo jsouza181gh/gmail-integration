@@ -9,8 +9,9 @@ import os
 from src.agent.actions import ActionService
 from src.agent.approvals import ApprovalService
 from src.agent.config import DbAgentConfigs
-from src.agent.context import AgentContext, LLMDeps, RunScope
+from src.agent.context import AgentContext, ChatScope, LLMDeps, RunScope
 from src.agent.executor import ToolExecutor
+from src.agent.flows.chat_turn import ChatTurnFlow
 from src.agent.flows.execute_action import ExecuteActionFlow
 from src.agent.flows.process_email import ProcessEmailFlow
 from src.agent.kb import DbKb
@@ -55,10 +56,13 @@ class Agent:
         docs = DbDocCatalog(sf)
         rules = RuleAdmin(sf)
 
-        def context_factory(run: RunScope, email_id: str) -> AgentContext:
+        def build_context(
+            run: RunScope, email_id: str | None, chat: ChatScope | None
+        ) -> AgentContext:
             return AgentContext(
                 run=run,
                 email_id=email_id,
+                chat=chat,
                 llm=LLMDeps(structured=gateway, tools=gateway),
                 taxonomy=store,
                 mail=mail,
@@ -75,6 +79,12 @@ class Agent:
                 cards=self.chat_store,
             )
 
+        def context_factory(run: RunScope, email_id: str) -> AgentContext:
+            return build_context(run, email_id, None)
+
+        def chat_context(run: RunScope, chat: ChatScope) -> AgentContext:
+            return build_context(run, None, chat)
+
         self.execute_action = ExecuteActionFlow(
             self.approvals, store, GmailActions(get_gmail_service, has_scope)
         )
@@ -88,4 +98,14 @@ class Agent:
             configs=DbAgentConfigs(sf),
             kb=kb,
             context_factory=context_factory,
+        )
+        self.chat_turn = ChatTurnFlow(
+            store=self.chat_store,
+            trail=self.trail,
+            loop=AgentLoop(self.executor, self.trail, gateway),
+            configs=DbAgentConfigs(sf),
+            kb=kb,
+            approvals=self.approvals,
+            context_factory=chat_context,
+            structured=gateway,
         )

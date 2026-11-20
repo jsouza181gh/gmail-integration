@@ -6,11 +6,12 @@ and the email facts, keeping third-party content fenced as data.
 """
 from collections.abc import Sequence
 from datetime import date
+from typing import Literal
 
 from src.agent.state import EmailFacts
 from src.agent.types import SenderStats
 from src.db.rows import AgentConfigRow
-from src.llm.types import ChatMessage, Prompt, Schema
+from src.llm.types import BinaryPart, ChatMessage, Prompt, Schema
 
 DECIDE_SCOPES = ("classification", "decision")
 
@@ -131,3 +132,80 @@ def build_decide_prompt(
             ChatMessage(role="human", content=f"<email_data>\n{data}\n</email_data>"),
         ),
     )
+
+
+# --- chat ---------------------------------------------------------------------
+
+NL = "\n"
+CHAT_MAX_TURNS = 8
+CHAT_ATTEMPTS = 3
+
+TRANSCRIBE_PROMPT = """Transcreva fielmente o áudio do usuário, em português do Brasil, como texto
+corrido com pontuação. Não responda nem resuma: só a transcrição. Se não
+houver fala inteligível, devolva texto vazio.
+"""
+
+TOOL_LABELS: dict[str, str] = {
+    "search_mail": "buscando nos e-mails…",
+    "read_email": "lendo o e-mail…",
+    "find_documents": "procurando documentos…",
+    "list_emails": "consultando o Gmail…",
+    "list_labels": "consultando o Gmail…",
+    "list_rules": "olhando suas regras…",
+    "sender_stats": "olhando o histórico do remetente…",
+    "show_emails": "separando os e-mails…",
+    "share_documents": "preparando o download…",
+    "list_pending": "olhando as aprovações…",
+    "decide_pending": "preparando a decisão…",
+    "propose_email_action": "preparando a sugestão…",
+    "propose_rule": "montando a regra…",
+    "propose_preference": "anotando a preferência…",
+    "propose_promotion": "preparando a promoção…",
+    "propose_policy": "preparando a política…",
+}
+DEFAULT_TOOL_LABEL = "trabalhando…"
+
+
+class Transcript(Schema):
+    text: str
+
+
+class HistoryTurn(Schema):
+    role: Literal["user", "assistant"]
+    text: str
+
+
+def build_transcribe_prompt(mime_type: str, data: bytes) -> Prompt:
+    return Prompt(
+        purpose="transcribe",
+        messages=(
+            ChatMessage(role="system", content=TRANSCRIBE_PROMPT),
+            ChatMessage(role="human", content="Áudio do usuário:",
+                        parts=(BinaryPart(mime_type=mime_type, data=data),)),
+        ),
+        attempts=CHAT_ATTEMPTS,
+    )
+
+
+def build_chat_prompt(
+    config: AgentConfigRow,
+    history: Sequence[HistoryTurn],
+    kb: Sequence[str],
+    text: str,
+    today: date,
+    pending: int,
+) -> Prompt:
+    system = [
+        config.chat_prompt.rstrip(),
+        "",
+        f"Hoje: {today.isoformat()}. Sugestões pendentes de aprovação: {pending}.",
+    ]
+    if kb:
+        system += ["", "Preferências e feedback do usuário:", *(f"- {k}" for k in kb)]
+    system += ["", _FENCE]
+    messages = [ChatMessage(role="system", content=NL.join(system))]
+    messages += [
+        ChatMessage(role="human" if h.role == "user" else "ai", content=h.text) for h in history
+    ]
+    messages.append(ChatMessage(role="human", content=text))
+    return Prompt(purpose="chat", messages=tuple(messages), attempts=CHAT_ATTEMPTS)

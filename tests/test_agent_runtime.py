@@ -271,3 +271,13 @@ def test_loop_carries_thought_signatures_to_next_turn(trail: Trail) -> None:
         make_ctx(run_id=run, caller=caller), _state(), PROMPT, max_turns=3
     )
     assert caller.prompts[1].messages[1].signatures == {"c1": "c2ln"}
+
+
+def test_loop_calls_on_tool(trail: Trail) -> None:
+    run = trail.start_run("webhook", "a", 1)
+    caller = FakeToolCaller([turn("", _call("peek", "c1", note="1")), turn("fim")])
+    seen: list[str] = []
+    AgentLoop(ToolExecutor(REGISTRY, trail), trail, caller).run(
+        make_ctx(run_id=run, caller=caller), _state(), PROMPT, max_turns=3, on_tool=seen.append
+    )
+    assert seen == ["peek"]

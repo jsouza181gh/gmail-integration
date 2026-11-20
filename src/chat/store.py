@@ -7,11 +7,11 @@ method is its own transaction.
 """
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.agent.prompts import HistoryTurn
 from src.agent.types import (
     ActionsDraft,
     CardDraft,
@@ -151,11 +151,6 @@ class MessageView(Schema):
 class TurnView(Schema):
     user: MessageView
     assistant: MessageView
-
-
-class HistoryLine(Schema):
-    role: Literal["user", "assistant"]
-    text: str
 
 
 def _size(n: int) -> str:
@@ -333,7 +328,7 @@ class ChatStore:
 
     def history(
         self, conversation_id: int, before_id: int, limit: int = HISTORY_LIMIT
-    ) -> list[HistoryLine]:
+    ) -> list[HistoryTurn]:
         """Finished messages before `before_id`, oldest first, with card outcomes."""
         with self.sf() as s:
             rows = s.scalars(
@@ -347,7 +342,7 @@ class ChatStore:
                 .limit(limit)
             ).all()
             cards = self._cards(s, [m.id for m in rows if m.role == "assistant"])
-        lines: list[HistoryLine] = []
+        lines: list[HistoryTurn] = []
         for m in reversed(rows):
             text = m.text
             notes = [
@@ -357,7 +352,7 @@ class ChatStore:
             if notes:
                 text = "\n".join([text, *notes]) if text else "\n".join(notes)
             if text:
-                lines.append(HistoryLine(role="user" if m.role == "user" else "assistant",
+                lines.append(HistoryTurn(role="user" if m.role == "user" else "assistant",
                                          text=text))
         return lines
 
