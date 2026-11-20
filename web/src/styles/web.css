@@ -46,9 +46,48 @@ button.ia-bottomnav__item { border: 0; background: none; cursor: pointer; }
 .login__card { display: grid; gap: 16px; padding: 24px; }
 .login__code { font: 600 24px/1 var(--font-mono); letter-spacing: .3em; text-indent: .3em; text-align: center; }
 
-/* Chat placeholder */
-.chat-composer { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 24px; padding: 8px 8px 8px 20px; }
-.chat-composer__input { all: unset; width: 100%; font: 400 15px/22px var(--font-sans); color: var(--ink); }
+/* Chat (design: Chat.dc.html) */
+.chat-page { display: flex; flex-direction: column; min-height: 100vh; max-width: 780px; margin: 0 auto; }
+.chat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 24px 24px 0; }
+.chat-main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 20px; padding: 24px 24px 16px; }
+.chat-thread { display: flex; flex-direction: column; gap: 20px; }
+.chat-user { align-self: flex-end; max-width: 80%; background: var(--surface-3); border-radius: 16px 16px 4px 16px; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-user__audio { gap: 6px; }
+.chat-user__audio svg { width: 14px; height: 14px; }
+.chat-audio { width: 100%; max-width: 280px; height: 36px; }
+.chat-link { border: 0; background: none; color: var(--ink-muted); font: inherit; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 0 0 0 6px; }
+.chat-link svg { width: 12px; height: 12px; }
+.chat-bot { display: flex; gap: 12px; align-items: flex-start; }
+.chat-bot__avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--ink); color: var(--ink-inverse); flex: none; }
+.chat-bot__avatar svg { width: 16px; height: 16px; }
+.chat-bot__body { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1 1 0; }
+.chat-md { overflow-wrap: anywhere; }
+.chat-md p, .chat-md ul, .chat-md ol { margin: 0 0 8px; }
+.chat-md > :last-child { margin-bottom: 0; }
+.chat-md ul, .chat-md ol { padding-left: 20px; }
+.chat-md code { font-family: var(--font-mono); font-size: 13px; background: var(--raised); border-radius: 6px; padding: 1px 5px; }
+.chat-progress { display: flex; align-items: center; gap: 8px; margin: 0; }
+.chat-spinner { width: 12px; height: 12px; border-radius: 9999px; border: 2px solid var(--raised-2); border-top-color: var(--accent); animation: chat-spin .8s linear infinite; }
+@keyframes chat-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .chat-spinner { animation: none; } }
+.chat-card { display: grid; gap: 12px; background: var(--surface-1); }
+.chat-card__list { display: flex; flex-direction: column; gap: 2px; }
+.chat-card__item { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chat-card__text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 0; }
+.chat-foot { position: sticky; bottom: 0; padding: 8px 24px 24px; background: var(--bg); }
+.chat-foot__note { margin: 8px 0 0; text-align: center; }
+.chat-composer { display: flex; align-items: flex-end; gap: 8px; background: var(--surface-3); border-radius: 24px; padding: 8px; }
+.chat-composer__field { flex: 1 1 0; min-width: 0; display: flex; align-items: center; min-height: 40px; padding-left: 12px; }
+.chat-composer__input { all: unset; width: 100%; max-height: 160px; overflow-y: auto; font: 400 15px/22px var(--font-sans); color: var(--ink); white-space: pre-wrap; field-sizing: content; }
+.chat-composer__rec { flex: 1 1 0; display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; color: var(--ink-muted); }
+.chat-rec-dot { width: 10px; height: 10px; border-radius: 9999px; background: var(--danger); }
+.chat-round { border-radius: 9999px; }
+@media (max-width: 639px) {
+  .chat-head { padding: 16px 16px 0; }
+  .chat-main { padding: 16px; }
+  .chat-foot { padding: 8px 16px 16px; bottom: var(--nav-bottom-height); }
+  .chat-user { max-width: 90%; }
+}
 
 /* Caixa: list + detail on wide screens; one pane at a time below 900px */
 .detail { display: flex; flex-direction: column; gap: 16px; padding: 24px; }

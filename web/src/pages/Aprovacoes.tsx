@@ -30,6 +30,10 @@ function headline(n: number, loading: boolean): string {
   return `${plural(n, 'sugestão', 'sugestões')} esperando você`
 }
 
+function discussDraft(a: Action): string {
+  return `Sobre a sugestão #${a.id} (${actionKind(a.kind).label.toLowerCase()} em ${senderName(a.sender)}): `
+}
+
 function decisionError(err: unknown): string {
   if (err instanceof ApiError && err.status === 403) return 'Requisição recusada. Recarregue a página.'
   return err instanceof ApiError ? err.detail : 'Não foi possível registrar a decisão.'
@@ -245,6 +249,14 @@ function GroupCard({
               </span>
             </span>
             <span className="ia-num ia-subtle">{formatWhen(a.created_at, now)}</span>
+            <Link
+              className="ia-btn ia-btn--ghost ia-btn--sm ia-btn--icon"
+              to={`/chat?draft=${encodeURIComponent(discussDraft(a))}`}
+              aria-label={`Discutir no chat: ${subjectOf(a)}`}
+              title="Discutir no chat"
+            >
+              <Icon name="message" />
+            </Link>
           </div>
         ))}
       </div>

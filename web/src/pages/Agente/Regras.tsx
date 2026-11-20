@@ -18,7 +18,8 @@ function condition(r: Rule): string {
     r.category && `categoria ${r.category}`,
     r.subject_contains && `assunto contém “${r.subject_contains}”`,
   ].filter((p): p is string => Boolean(p))
-  return parts.join(' e ') || '—'
+  const text = parts.join(' e ') || '—'
+  return r.unless_document ? `${text}, exceto com documento` : text
 }
 
 export function Regras() {
@@ -155,6 +156,7 @@ function NewRuleForm({ onDone }: { onDone: () => Promise<void> }) {
     category: '',
     subject_contains: '',
   })
+  const [unlessDocument, setUnlessDocument] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const set = (key: keyof typeof fields) => (value: string) => setFields((f) => ({ ...f, [key]: value }))
 
@@ -165,6 +167,7 @@ function NewRuleForm({ onDone }: { onDone: () => Promise<void> }) {
       if (fields.sender_domain.trim()) rule.sender_domain = fields.sender_domain.trim()
       if (fields.category) rule.category = fields.category
       if (fields.subject_contains.trim()) rule.subject_contains = fields.subject_contains.trim()
+      if (unlessDocument) rule.unless_document = true
       return api.addRule(rule)
     },
     onSuccess: onDone,
@@ -219,6 +222,10 @@ function NewRuleForm({ onDone }: { onDone: () => Promise<void> }) {
       <Field label="Assunto contém">
         <input value={fields.subject_contains} onChange={(e) => set('subject_contains')(e.target.value)} />
       </Field>
+      <label className="row t-small" style={{ gridColumn: '1 / -1' }}>
+        <input type="checkbox" checked={unlessDocument} onChange={(e) => setUnlessDocument(e.target.checked)} />
+        Exceto quando tiver documento (nota, boleto…)
+      </label>
       {error ? (
         <p className="warn-line" role="alert" style={{ gridColumn: '1 / -1' }}>
           <span className="ia-ico-warning">

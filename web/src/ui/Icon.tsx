@@ -1,6 +1,7 @@
 import {
   Activity,
   Archive,
+  ArrowUp,
   Ban,
   Bot,
   Calendar,
@@ -20,16 +21,19 @@ import {
   Mail,
   MailOpen,
   Menu,
+  Mic,
   MessageSquare,
   Monitor,
   Paperclip,
   Pause,
+  Play,
   Plus,
   RefreshCw,
   Search,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Square,
   Star,
   Tag,
   Trash2,
@@ -78,6 +82,10 @@ const ICONS: Record<IconName, LucideIcon> = {
   clock: Clock,
   star: Star,
   mailopen: MailOpen,
+  mic: Mic,
+  arrowup: ArrowUp,
+  square: Square,
+  play: Play,
 }
 
 export type { IconName }
