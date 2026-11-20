@@ -6,11 +6,17 @@ from fastapi import HTTPException, Request
 from googleapiclient.discovery import Resource
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.agent.actions import ActionService
 from src.agent.approvals import ApprovalService
+from src.agent.kb import KbAdmin
+from src.agent.policy import PolicyAdmin, PolicyResolver
+from src.agent.rules import RuleAdmin, RuleEngine
 from src.auth.config import AuthSettings
 from src.auth.crypto import read_access
 from src.auth.security_log import Alerter, SecurityLog
 from src.auth.service import AuthService
+from src.chat.cards import CardService
+from src.chat.store import ChatStore
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
 
@@ -29,6 +35,15 @@ def _no_gmail() -> Resource:
     raise RuntimeError("Gmail indisponível nesta instância da API")
 
 
+class StreamTiming:
+    """How the chat SSE stream polls the database (seconds)."""
+
+    def __init__(self, poll_s: float = 0.75, max_s: float = 180.0, ping_s: float = 15.0) -> None:
+        self.poll_s = poll_s
+        self.max_s = max_s
+        self.ping_s = ping_s
+
+
 class ApiDeps:
     def __init__(
         self,
@@ -42,6 +57,9 @@ class ApiDeps:
         index_store: IndexStore,
         gmail: Callable[[], Resource],
         clock: Callable[[], datetime],
+        chat: ChatStore,
+        cards: CardService,
+        stream: "StreamTiming",
     ) -> None:
         self.sf = sf
         self.settings = settings
@@ -52,6 +70,9 @@ class ApiDeps:
         self.index_store = index_store
         self.gmail = gmail
         self.clock = clock
+        self.chat = chat
+        self.cards = cards
+        self.stream = stream
 
     @classmethod
     def build(
@@ -62,19 +83,35 @@ class ApiDeps:
         alerts: Alerter,
         gmail: Callable[[], Resource] = _no_gmail,
         clock: Callable[[], datetime] = _utcnow,
+        stream: "StreamTiming | None" = None,
     ) -> "ApiDeps":
         log = SecurityLog(sf, alerts, clock)
         jobs = JobStore(sf)
+        approvals = ApprovalService(sf, jobs, clock)
+        chat = ChatStore(sf, clock)
+        cards = CardService(
+            store=chat,
+            rules=RuleAdmin(sf, clock),
+            matcher=RuleEngine(sf),
+            kb=KbAdmin(sf, clock),
+            policies=PolicyAdmin(sf, clock),
+            approvals=approvals,
+            actions=ActionService(sf, jobs, PolicyResolver(sf), clock),
+            clock=clock,
+        )
         return cls(
             sf=sf,
             settings=settings,
             auth=AuthService(sf, settings, log, clock),
             log=log,
             jobs=jobs,
-            approvals=ApprovalService(sf, jobs, clock),
+            approvals=approvals,
             index_store=IndexStore(sf),
             gmail=gmail,
             clock=clock,
+            chat=chat,
+            cards=cards,
+            stream=stream or StreamTiming(),
         )
 
 
