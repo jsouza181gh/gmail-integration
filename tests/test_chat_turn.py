@@ -134,7 +134,7 @@ def test_text_turn_answers_and_records_run(session_factory: sessionmaker[Session
     run = w.trail.run(done.run_id)
     assert (run.trigger, run.status, run.email_id) == ("chat", "done", None)
     prompt = w.caller.prompts[0]
-    assert prompt.purpose == "chat" and prompt.attempts == 3
+    assert prompt.purpose == "chat" and prompt.attempts == 6
     assert prompt.messages[-1].content == "quais boletos tenho?"
 
 
@@ -146,7 +146,7 @@ def test_audio_turn_transcribes_first(session_factory: sessionmaker[Session]) ->
     user = w.store.turn(t.assistant.id).user
     assert (user.text, user.status) == ("tudo da loja pra lixeira", "done")
     (tp,) = w.transcriber.prompts
-    assert tp.purpose == "transcribe" and tp.attempts == 3
+    assert tp.purpose == "transcribe" and tp.attempts == 6
     part = tp.messages[-1].parts[0]
     assert part.mime_type == "audio/wav" and part.data == data
     assert w.caller.prompts[0].messages[-1].content == "tudo da loja pra lixeira"

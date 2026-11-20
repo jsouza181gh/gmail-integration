@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -606,7 +606,7 @@ def test_foreign_signatures_replaced() -> None:
     chats = {"B": FakeChat([], [ai_turn("ok")])}
     gw(models=["B"], chats=chats).generate_turn(prompt, [get_email_body])
     ai = chats["B"].tool_runnable.seen[0][1]
-    assert ai.additional_kwargs[SIG_KEY] == {"c1": "skip_thought_signature_validator"}
+    assert ai.additional_kwargs[SIG_KEY] == {"c1": "skip/thought/signature/validator"}
 
 
 def test_own_signatures_kept() -> None:
@@ -638,3 +638,39 @@ def test_full_cycle_of_failures_backs_off_once() -> None:
              "B": FakeChat([RuntimeError("503 UNAVAILABLE")])}
     res = gw(models=["A", "B"], chats=chats, sleeps=sleeps).generate_structured(P, Out)
     assert res.model == "A" and len(sleeps) == 1  # A fails, B fails -> wait -> A
+
+
+def test_neutral_signature_is_standard_base64() -> None:
+    import base64
+
+    from src.llm.gateway import NEUTRAL_SIGNATURE
+
+    # LangChain decodes signatures as standard base64; Gemini documents the
+    # urlsafe spelling "skip_thought_signature_validator" - same bytes.
+    assert base64.b64decode(NEUTRAL_SIGNATURE, validate=True) == base64.urlsafe_b64decode(
+        "skip_thought_signature_validator"
+    )
+
+
+def test_sticks_to_last_working_model() -> None:
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE")]), "B": FakeChat([Out(x=1), Out(x=2)])}
+    g = gw(models=["A", "B"], chats=chats)
+    assert g.generate_structured(P, Out).model == "B"
+    assert g.generate_structured(P, Out).model == "B"  # A is not tried first again
+
+
+def test_sticky_model_expires_after_ten_minutes() -> None:
+    wall = Wall()
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE"), Out(x=3)]), "B": FakeChat([Out(x=1)])}
+    g = gw(models=["A", "B"], chats=chats, wall=wall)
+    g.generate_structured(P, Out)
+    wall.at = wall.at + timedelta(minutes=11)
+    assert g.generate_structured(P, Out).model == "A"
+
+
+def test_chat_gateway_uses_short_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.llm.config import CHAT_TIMEOUT_S, build_chat_gateway
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    client = build_chat_gateway()._chat_factory("gemini-3.6-flash")
+    assert CHAT_TIMEOUT_S == 30 and getattr(client, "timeout") == 30

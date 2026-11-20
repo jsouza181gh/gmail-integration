@@ -181,7 +181,7 @@ def build_decide_prompt(
 
 NL = "\n"
 CHAT_MAX_TURNS = 8
-CHAT_ATTEMPTS = 3
+CHAT_ATTEMPTS = 6  # one per model of the default chat chain
 
 TRANSCRIBE_PROMPT = """Transcreva fielmente o áudio do usuário, em português do Brasil, como texto
 corrido com pontuação. Não responda nem resuma: só a transcrição. Se não

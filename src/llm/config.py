@@ -3,7 +3,7 @@ import os
 from collections.abc import Callable
 from typing import Literal
 
-from src.llm.gateway import DEFAULT_EMBED_MODEL, LLMGateway
+from src.llm.gateway import DEFAULT_EMBED_MODEL, LLMGateway, chat_client_factory
 from src.llm.types import CallRecorder, Schema
 
 # 3.1 is the fallback: when 3.5 answers 503 the next attempt goes to 3.1.
@@ -14,6 +14,9 @@ DEFAULT_CHAT_MODELS = (
     "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,"
     "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
 )
+# A chat answer waits for the user: an overloaded model is dropped after 30 s
+# instead of the 90 s background jobs can afford.
+CHAT_TIMEOUT_S = 30
 
 
 class LLMConfig(Schema):
@@ -79,4 +82,5 @@ def build_chat_gateway(
         embed_model=cfg.embed_model,
         mode_source=mode_source,
         recorder=recorder,
+        chat_factory=chat_client_factory(CHAT_TIMEOUT_S),
     )

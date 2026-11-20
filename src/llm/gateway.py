@@ -57,8 +57,12 @@ from src.utils.console import log
 # Where langchain-google-genai keeps Gemini 3 function-call thought signatures.
 SIGNATURES_KEY = "__gemini_function_call_thought_signatures__"
 # Gemini's documented stand-in when a function call's signature came from
-# another model (or was never produced by this one).
-NEUTRAL_SIGNATURE = "skip_thought_signature_validator"
+# another model: "skip_thought_signature_validator" is its urlsafe-base64
+# spelling; LangChain decodes standard base64, so send the same bytes that way.
+NEUTRAL_SIGNATURE = "skip/thought/signature/validator"
+# After a fallback answers, later calls start there for a while instead of
+# knocking on the overloaded models above it first.
+STICKY_S = 600
 # Daily quotas reset at midnight Pacific time.
 QUOTA_TZ = ZoneInfo("America/Los_Angeles")
 BACKOFF_BASE_S = 3
@@ -194,8 +198,14 @@ def _signatures(out: AIMessage) -> dict[str, str]:
     return sigs
 
 
-def _default_chat(model: str) -> ChatModelLike:
-    return ChatGoogleGenerativeAI(model=model, max_retries=0, timeout=90)
+def chat_client_factory(timeout_s: float) -> Callable[[str], ChatModelLike]:
+    def build(model: str) -> ChatModelLike:
+        return ChatGoogleGenerativeAI(model=model, max_retries=0, timeout=timeout_s)
+
+    return build
+
+
+_default_chat = chat_client_factory(90)
 
 
 class GenAIEmbedder:
@@ -271,13 +281,33 @@ class LLMGateway:
         self._wall = wall
         # model -> when its daily quota comes back (shared by every lane)
         self._exhausted: dict[str, datetime] = {}
+        # the model that answered last and until when calls start with it
+        self._sticky: tuple[str, datetime] | None = None
 
     def _available(self, models: Sequence[str]) -> tuple[str, ...]:
         now = self._wall()
         with self._lock:
-            for m in [m for m, until in self._exhausted.items() if until <= now]:
+            freed = [m for m, until in self._exhausted.items() if until <= now]
+            for m in freed:
                 del self._exhausted[m]
-            return tuple(m for m in models if m not in self._exhausted)
+            if freed:  # a better model is back: start from the top again
+                self._sticky = None
+            ok = tuple(m for m in models if m not in self._exhausted)
+            if self._sticky is not None:
+                model, until = self._sticky
+                if until <= now or model not in ok:
+                    self._sticky = None
+                else:
+                    start = ok.index(model)
+                    ok = ok[start:] + ok[:start]
+            return ok
+
+    def _stick(self, model: str, chain: Sequence[str]) -> None:
+        with self._lock:
+            self._sticky = (
+                None if model == chain[0]
+                else (model, self._wall() + timedelta(seconds=STICKY_S))
+            )
 
     def _mark_exhausted(self, model: str, until: datetime) -> None:
         with self._lock:
@@ -402,6 +432,9 @@ class LLMGateway:
                         context=prompt.context,
                     )
                 )
+                with self._lock:
+                    if self._sticky is not None and self._sticky[0] == model:
+                        self._sticky = None  # it stopped answering: back to the top
                 if kind == "fatal":
                     raise LLMFatalError(f"erro não recuperável ({model}): {exc}") from exc
                 # back off only when the next attempt starts the rotation over
@@ -413,6 +446,7 @@ class LLMGateway:
                     turn -= 1  # the same position now holds the next model
                 continue
 
+            self._stick(model, chain)
             self._mark_done()
             ended = self._clock()
             self._record(
