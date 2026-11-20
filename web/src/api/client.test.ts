@@ -1,5 +1,5 @@
 import { delay, http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { z } from 'zod'
 import { server } from '../../test/server'
 import { ApiError } from './errors'
@@ -7,6 +7,10 @@ import { onSessionLost, request } from './client'
 
 const Item = z.object({ n: z.number() })
 
+// A signed-in browser always holds the csrf cookie (it lives as long as the refresh token).
+beforeEach(() => {
+  document.cookie = 'csrf=sess; path=/'
+})
 afterEach(() => {
   document.cookie = 'csrf=; max-age=0; path=/'
 })
@@ -86,6 +90,23 @@ describe('request', () => {
       status: 429,
       detail: 'Muitas requisições, tente de novo em instantes',
     })
+  })
+
+  test('401_without_a_session_skips_refresh_and_reports_session_lost', async () => {
+    document.cookie = 'csrf=; max-age=0; path=/'
+    const lost = vi.fn()
+    onSessionLost(lost)
+    let refreshCalls = 0
+    server.use(
+      http.get('/api/auth/me', () => new HttpResponse(null, { status: 401 })),
+      http.post('/api/auth/refresh', () => {
+        refreshCalls += 1
+        return new HttpResponse(null, { status: 403 })
+      }),
+    )
+    await expect(request('GET', '/api/auth/me', { schema: Item })).rejects.toMatchObject({ status: 401 })
+    expect(refreshCalls).toBe(0)
+    expect(lost).toHaveBeenCalledTimes(1)
   })
 
   test('auth_routes_never_trigger_refresh', async () => {

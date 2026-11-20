@@ -80,7 +80,9 @@ export async function request<S extends z.ZodType | undefined = undefined>(
 ): Promise<S extends z.ZodType ? z.infer<S> : void> {
   let res = await send(method, path, opts)
   if (res.status === 401 && !NO_REFRESH.has(path)) {
-    if (await refreshOnce()) {
+    // No csrf cookie = never signed in (or already signed out): a refresh would only
+    // be refused by the server and logged as a CSRF security event.
+    if (csrfToken() !== null && (await refreshOnce())) {
       res = await send(method, path, opts)
     } else {
       sessionLost()
