@@ -88,3 +88,12 @@ button.ia-bottomnav__item { border: 0; background: none; cursor: pointer; }
   .doc-head { display: none; }
   .doc-row .doc-meta-sm { display: block; }
 }
+
+/* Execuções */
+.backfill-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
+.run-row { grid-template-columns: auto 1fr auto; align-items: center; }
+.dead-job { align-items: flex-start; }
+.dead-job__text { display: flex; flex-direction: column; min-width: 0; }
+.usage-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; padding: 8px 4px 0; border-bottom: 1px solid var(--line); }
+.usage-chart__bar { flex: 1 1 0; background: var(--raised); border-radius: 6px 6px 0 0; }
+.usage-chart__bar--now { background: var(--accent); }

@@ -101,3 +101,22 @@ const MONTHS = [
 export function longDate(d: Date): string {
   return `${WEEKDAYS_LONG[d.getDay()]}, ${d.getDate()} de ${MONTHS[d.getMonth()]}`
 }
+
+export function formatInt(n: number): string {
+  return n.toLocaleString('pt-BR')
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms} ms`
+  return `${(ms / 1000).toFixed(1).replace('.', ',')} s`
+}
+
+export function formatTime(value: string | Date | null): string {
+  const d = toDate(value)
+  return d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : DASH
+}
+
+export function formatEta(hours: number | null): string {
+  if (hours === null || !Number.isFinite(hours)) return DASH
+  return hours >= 48 ? `≈ ${Math.round(hours / 24)} dias` : `≈ ${Math.round(hours)} h`
+}

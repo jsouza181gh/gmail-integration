@@ -3,7 +3,11 @@ import {
   dueLabel,
   formatDate,
   formatDateTime,
+  formatDuration,
+  formatEta,
+  formatInt,
   formatMoney,
+  formatTime,
   formatPercent,
   formatWhen,
   longDate,
@@ -63,6 +67,24 @@ describe('sender and subject', () => {
   test('sender_address', () => {
     expect(senderAddress('Light <No-Reply@Light.com.br>')).toBe('no-reply@light.com.br')
     expect(senderAddress(null)).toBeNull()
+  })
+})
+
+describe('formatInt, formatDuration and formatTime', () => {
+  test('int_uses_dot_thousands', () => expect(formatInt(45038)).toBe('45.038'))
+  test('duration_in_ms_or_seconds', () => {
+    expect(formatDuration(310)).toBe('310 ms')
+    expect(formatDuration(1900)).toBe('1,9 s')
+    expect(formatDuration(2000)).toBe('2,0 s')
+  })
+  test('time_is_local_hh_mm', () => {
+    expect(formatTime(new Date(2026, 10, 19, 21, 5).toISOString())).toBe('21:05')
+    expect(formatTime(null)).toBe('—')
+  })
+  test('eta_in_hours_then_days', () => {
+    expect(formatEta(19)).toBe('≈ 19 h')
+    expect(formatEta(72)).toBe('≈ 3 dias')
+    expect(formatEta(null)).toBe('—')
   })
 })
 
