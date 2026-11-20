@@ -165,6 +165,9 @@ def test_list_emails_only_in_chat(trail: Trail) -> None:
     )
     assert res.ok and mail.queries == [MailQuery(query="is:unread")]
     assert '"id":"x"' in res.message.content
+    # subjects/snippets are third-party text: fenced like every other email read
+    assert res.message.content.startswith("<email_data>")
+    assert res.message.content.rstrip().endswith("</email_data>")
 
 
 def test_list_emails_caps_max_results(trail: Trail) -> None:

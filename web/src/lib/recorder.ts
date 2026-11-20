@@ -27,15 +27,25 @@ export function canRecord(): boolean {
 
 export async function startRecording(opts: RecordOptions = {}): Promise<Recording> {
   const maxMs = opts.maxMs ?? MAX_RECORDING_MS
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  })
+  // Created and resumed synchronously inside the user's tap: iOS Safari keeps a
+  // context started after an await (the mic prompt) suspended, recording silence.
   const ctx = new AudioContext()
+  const resumed = ctx.resume()
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    })
+  } catch (err) {
+    void ctx.close().catch(() => {})
+    throw err
+  }
   const release = () => {
     stream.getTracks().forEach((t) => t.stop())
     void ctx.close().catch(() => {})
   }
   try {
+    await resumed
     await ctx.audioWorklet.addModule('/recorder-worklet.js')
   } catch (err) {
     release()

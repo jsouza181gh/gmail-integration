@@ -13,7 +13,9 @@ from src.agent.types import DocHit, MailHit
 from src.db.models import Attachment, Email
 from src.db.rows import EmailRow
 from src.indexing.store import IndexStore, SearchHit
+from src.llm.errors import LLMError
 from src.llm.types import CallContext, EmbedInput, Embedder
+from src.utils.console import log
 
 DOC_TEXT_WORDS = 5
 
@@ -35,10 +37,16 @@ class DbRetriever:
         with self.index.sf() as s:
             if s.get_bind().dialect.name != "postgresql":
                 return []
-        result = self.embedder.embed(
-            [EmbedInput(text=query)], purpose="chat_search", task="RETRIEVAL_QUERY",
-            context=call,
-        )
+        try:
+            result = self.embedder.embed(
+                [EmbedInput(text=query)], purpose="chat_search", task="RETRIEVAL_QUERY",
+                context=call,
+            )
+        except LLMError as exc:
+            # The embedding quota is shared with the backfill and can run out for
+            # the day: the keyword pass still answers.
+            log(f"busca semântica indisponível, só palavras-chave: {exc}")
+            return []
         return self.index.search(result.vectors[0], k)
 
     def search(self, query: str, k: int, call: CallContext) -> tuple[MailHit, ...]:

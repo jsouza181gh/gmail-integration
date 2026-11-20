@@ -91,3 +91,28 @@ def test_retriever_merges_vector_and_keyword_pg(pg: sessionmaker[Session]) -> No
     ids = [h.id for h in hits]
     assert ids[0] == "vectest-1" and hits[0].score > 0.99
     assert "vectest-0" in ids
+
+
+def test_retriever_falls_back_to_keyword_when_embedding_fails_pg(pg: sessionmaker[Session]) -> None:
+    from collections.abc import Sequence
+
+    from src.chat.retrieval import DbRetriever
+    from src.indexing.store import IndexStore
+    from src.llm.errors import LLMExhaustedError
+    from src.llm.types import CallContext, EmbedInput, EmbedResult, EmbedTask
+
+    class QuotaGone:
+        def embed(
+            self,
+            inputs: Sequence[EmbedInput],
+            *,
+            purpose: str,
+            task: EmbedTask,
+            context: CallContext = CallContext(),
+        ) -> EmbedResult:
+            raise LLMExhaustedError("cota esgotada", kinds=("rate",))
+
+    with pg.begin() as s:
+        s.get_one(Email, "vectest-0").subject = "Boleto vectestyy"
+    hits = DbRetriever(IndexStore(pg), QuotaGone()).search("vectestyy", 2, CallContext())
+    assert [h.id for h in hits] == ["vectest-0"]
