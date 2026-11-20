@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   dueLabel,
   formatDate,
+  formatDateTime,
   formatMoney,
   formatPercent,
   formatWhen,
@@ -63,6 +64,12 @@ describe('sender and subject', () => {
     expect(senderAddress('Light <No-Reply@Light.com.br>')).toBe('no-reply@light.com.br')
     expect(senderAddress(null)).toBeNull()
   })
+})
+
+describe('formatDateTime', () => {
+  test('date_and_time', () =>
+    expect(formatDateTime(new Date(2026, 10, 18, 8, 12).toISOString())).toBe('18/11/2026 08:12'))
+  test('null_is_dash', () => expect(formatDateTime(null)).toBe('—'))
 })
 
 describe('formatPercent and longDate', () => {

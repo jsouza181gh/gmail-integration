@@ -26,6 +26,12 @@ export function formatDate(value: string | Date | null): string {
   return d ? `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}` : DASH
 }
 
+export function formatDateTime(value: string | Date | null): string {
+  const d = toDate(value)
+  if (!d) return DASH
+  return `${formatDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 function dayNumber(d: Date): number {
   return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY_MS
 }

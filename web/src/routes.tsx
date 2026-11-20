@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router'
+import Caixa from './pages/Caixa'
 import Chat from './pages/Chat'
 import Login from './pages/Login'
 import Relevantes from './pages/Relevantes'
@@ -20,8 +21,8 @@ export function AppRoutes() {
       <Route path="/login" element={<Login />} />
       <Route element={<RequireAuth />}>
         <Route index element={<Relevantes />} />
-        <Route path="caixa" element={<Soon title="Caixa" />} />
-        <Route path="caixa/:emailId" element={<Soon title="Caixa" />} />
+        <Route path="caixa" element={<Caixa />} />
+        <Route path="caixa/:emailId" element={<Caixa />} />
         <Route path="aprovacoes" element={<Soon title="Aprovações" />} />
         <Route path="documentos" element={<Soon title="Documentos" />} />
         <Route path="chat" element={<Chat />} />

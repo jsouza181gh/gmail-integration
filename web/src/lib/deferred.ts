@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+/** How long an approve/reject waits for "Desfazer" before it is sent. */
+export const DECISION_DELAY_MS = 5000
+
 interface Scheduled {
   label: string
   run: () => Promise<void>
