@@ -327,3 +327,10 @@ def test_chat_prompt_v2_mentions_batch_tool_only() -> None:
     assert "propose_email_action " not in CHAT_PROMPT_V2
     assert "propose_email_action(" not in CHAT_PROMPT_V2
     assert "[evento]" in CHAT_PROMPT_V2
+
+
+def test_propose_rule_unseen_sender_without_close_match_is_allowed(w: ChatWorld) -> None:
+    res = w.run("propose_rule", {"name": "novo", "action": "trash",
+                                 "sender_address": "promo@desconhecido.com.br"})
+    assert res.ok and "nenhum e-mail de promo@desconhecido.com.br guardado ainda" in res.message.content
+    assert w.cards() == ["rule"]

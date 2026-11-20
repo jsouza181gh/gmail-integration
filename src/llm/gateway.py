@@ -404,7 +404,8 @@ class LLMGateway:
                 )
                 if kind == "fatal":
                     raise LLMFatalError(f"erro não recuperável ({model}): {exc}") from exc
-                switching = len(rotation) > 1
+                # back off only when the next attempt starts the rotation over
+                switching = turn % len(rotation) != 0
                 try:
                     self._backoff(kind, exc, attempt, model, switching)
                 except _QuotaGone as gone:

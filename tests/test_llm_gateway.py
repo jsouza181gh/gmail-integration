@@ -630,3 +630,11 @@ def test_chat_config_default_chain(monkeypatch: pytest.MonkeyPatch) -> None:
         "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
     )
+
+
+def test_full_cycle_of_failures_backs_off_once() -> None:
+    sleeps: list[float] = []
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE"), Out(x=1)]),
+             "B": FakeChat([RuntimeError("503 UNAVAILABLE")])}
+    res = gw(models=["A", "B"], chats=chats, sleeps=sleeps).generate_structured(P, Out)
+    assert res.model == "A" and len(sleeps) == 1  # A fails, B fails -> wait -> A

@@ -304,13 +304,16 @@ def propose_rule(
     )
     if not cond.has_condition():
         raise ValueError("a regra precisa de remetente, domínio, categoria ou assunto")
+    unseen = ""
     if cond.sender_address:
         count, close = ctx.rules.known_senders(cond.sender_address)
-        if not count:
-            hint = f"; parecido: {', '.join(close)}" if close else ""
+        if not count and close:  # likely a typo or an invented spelling
             raise ValueError(
-                f"nenhum e-mail de {cond.sender_address}; confira o endereço{hint}"
+                f"nenhum e-mail de {cond.sender_address}; confira o endereço;"
+                f" parecido: {', '.join(close)}"
             )
+        if not count:
+            unseen = f"; nenhum e-mail de {cond.sender_address} guardado ainda"
     _, affected = ctx.rules.existing(cond, 0)
     card = _card(ctx, RuleDraft(
         name=name.strip()[:120] or "regra do chat",
@@ -322,7 +325,7 @@ def propose_rule(
         unless_document=unless_document,
         affected=affected,
     ))
-    return f"cartão #{card}: regra afeta ~{affected} e-mail(s) já guardados; {WAITING}", None
+    return f"cartão #{card}: regra afeta ~{affected} e-mail(s) já guardados{unseen}; {WAITING}", None
 
 
 @tool(response_format="content_and_artifact", parse_docstring=True)
