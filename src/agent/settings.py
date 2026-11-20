@@ -10,6 +10,7 @@ from src.db.models import AppSetting, ConfigAudit
 
 LlmMode = Literal["free", "fast"]
 LLM_MODE = "llm_mode"
+BACKFILL_PAUSED = "backfill_paused"
 Channel = Literal["ui", "cli", "chat"]
 
 
@@ -23,6 +24,11 @@ def audit(
 ) -> None:
     s.add(ConfigAudit(entity=entity, entity_id=str(entity_id)[:64], channel=channel,
                       before=before, after=after, created_at=now))
+
+
+def _backfill_paused(s: Session) -> bool:
+    row = s.get(AppSetting, BACKFILL_PAUSED)
+    return row is not None and row.value == "1"
 
 
 class RuntimeSettings:
@@ -46,6 +52,24 @@ class RuntimeSettings:
             before = row.value if row else None
             s.merge(AppSetting(key=LLM_MODE, value=mode, updated_at=now))
             audit(s, "settings", LLM_MODE, channel, before, mode, now)
+
+    def backfill_paused(self) -> bool:
+        with self.sf() as s:
+            return _backfill_paused(s)
+
+    def set_backfill_paused(self, paused: bool, channel: Channel = "ui") -> None:
+        """Paused: the history backfill stops at its next page; new mail and chat go on."""
+        now = self._now()
+        with self.sf.begin() as s:
+            before = _backfill_paused(s)
+            if paused:
+                s.merge(AppSetting(key=BACKFILL_PAUSED, value="1", updated_at=now))
+            else:
+                row = s.get(AppSetting, BACKFILL_PAUSED)
+                if row is not None:
+                    s.delete(row)
+            audit(s, "settings", BACKFILL_PAUSED, channel,
+                  "pausado" if before else "rodando", "pausado" if paused else "rodando", now)
 
 
 def mode_source(

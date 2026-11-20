@@ -72,6 +72,14 @@ export default function Execucoes() {
     },
     onError: (err) => toast.show(failure(err, 'Não foi possível retomar o histórico.')),
   })
+  const toggle = useMutation({
+    mutationFn: (pause: boolean) => (pause ? api.backfillPause() : api.backfillResume()),
+    onSuccess: (status, pause) => {
+      qc.setQueryData(['backfill'], status)
+      toast.show(pause ? 'Histórico pausado.' : 'Histórico retomado.')
+    },
+    onError: (err) => toast.show(failure(err, 'Não foi possível mudar o histórico.')),
+  })
   const requeue = useMutation({
     mutationFn: api.requeueJob,
     onSuccess: async () => {
@@ -90,7 +98,13 @@ export default function Execucoes() {
     <Page>
       <PageHead title="O que o sistema está fazendo" />
 
-      {backfill.data ? <BackfillCard status={backfill.data} onResume={() => start.mutate()} resuming={start.isPending} /> : null}
+      {backfill.data ? <BackfillCard
+          status={backfill.data}
+          onResume={() => start.mutate()}
+          resuming={start.isPending}
+          onToggle={(pause) => toggle.mutate(pause)}
+          toggling={toggle.isPending}
+        /> : null}
       {backfill.isError ? <Empty text="Não foi possível carregar o progresso do histórico." /> : null}
 
       <div className="split">
@@ -242,13 +256,17 @@ function BackfillCard({
   status: s,
   onResume,
   resuming,
+  onToggle,
+  toggling,
 }: {
   status: NonNullable<ReturnType<typeof useBackfill>['data']>
   onResume: () => void
   resuming: boolean
+  onToggle: (pause: boolean) => void
+  toggling: boolean
 }) {
   const p = s.progress
-  const paused = s.deferred_until !== null
+  const paused = s.paused || s.deferred_until !== null
   const chain = p.jobs['backfill_page']
   const chainAlive = (chain?.queued ?? 0) + (chain?.running ?? 0) > 0
   const attachments = p.attachments
@@ -267,8 +285,11 @@ function BackfillCard({
             </span>
           </span>
         </div>
+        <span className="toolbar">
         {p.fetch_done ? (
           <Badge tone="accent" icon="check">Concluído</Badge>
+        ) : s.paused ? (
+          <Badge tone="warning" icon="pause">Pausado por você</Badge>
         ) : paused ? (
           <Badge tone="warning" icon="pause">
             {`Pausado: cota diária do Gemini, volta às ${formatTime(s.deferred_until)}`}
@@ -276,6 +297,18 @@ function BackfillCard({
         ) : (
           <Badge tone="accent" icon="activity">{`Rodando, página ${p.pages}`}</Badge>
         )}
+        {p.fetch_done ? null : (
+          <button
+            type="button"
+            className="ia-btn ia-btn--sm"
+            disabled={toggling}
+            onClick={() => onToggle(!s.paused)}
+          >
+            <Icon name={s.paused ? 'refresh' : 'pause'} />
+            {s.paused ? 'Retomar' : 'Pausar'}
+          </button>
+        )}
+        </span>
       </div>
       <Progress value={s.percent} paused={paused} height={10} />
       <div className="backfill-grid">
@@ -289,7 +322,7 @@ function BackfillCard({
         <Metric label="Ritmo" value={`${formatInt(s.pages_last_hour)} pág/h`} />
         <Metric label="Previsão" value={formatEta(s.eta_hours)} />
       </div>
-      {!p.fetch_done && !chainAlive ? (
+      {!p.fetch_done && !chainAlive && !s.paused ? (
         <div>
           <button type="button" className="ia-btn" disabled={resuming} onClick={onResume}>
             <Icon name="refresh" />

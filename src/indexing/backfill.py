@@ -15,6 +15,7 @@ from typing import Protocol
 from googleapiclient.discovery import Resource
 from pydantic import BaseModel
 
+from src.agent.settings import RuntimeSettings
 from src.alerts.service import AlertKind
 from src.classification.classifier import (
     GIVE_UP_CATEGORY,
@@ -27,11 +28,15 @@ from src.indexing.indexer import Indexer, defer_on_quota
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
 from src.jobs.types import BackfillPageJob, ClaimedJob, JobCounts
+from src.jobs.worker import Deferred
 from src.llm.errors import LLMExhaustedError
 from src.llm.types import Schema
 from src.utils.console import log
 
 BACKFILL_QUERY = "-in:chats -in:drafts"
+# Paused from the panel: the chain waits and re-checks every 5 min.
+PAUSE_RECHECK_S = 300
+PAUSED_REASON = "backfill pausado"
 RUN_QUERY = f"backfill:{BACKFILL_QUERY}"
 PAGE_SIZE = 25
 USER_ID = "me"
@@ -112,6 +117,8 @@ class Backfill:
         run = self.store.get_run(payload.run_id)
         if run.fetch_done:
             return
+        if RuntimeSettings(self.store.sf).backfill_paused():
+            raise Deferred(PAUSE_RECHECK_S, PAUSED_REASON)
         if payload.page_no < run.pages:  # already done; make sure the chain goes on
             self.jobs.enqueue(BackfillPageJob(run_id=run.id, page_no=run.pages))
             return

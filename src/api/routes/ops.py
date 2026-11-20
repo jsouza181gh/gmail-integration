@@ -4,14 +4,15 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select, update
 
+from src.agent.settings import RuntimeSettings
 from src.agent.trail import Trail
 from src.api import queries
 from src.api.deps import ApiDeps, get_deps, require_user
 from src.db.models import AgentRun, Job, LlmCall
 from src.db.rows import AgentStepRow
-from src.indexing.backfill import PAGE_SIZE, RUN_QUERY, BackfillProgress
+from src.indexing.backfill import PAGE_SIZE, PAUSED_REASON, RUN_QUERY, BackfillProgress
 from src.jobs.types import BackfillPageJob, DeadJob, JobCounts
 from src.llm.types import Schema
 from src.utils.console import log
@@ -28,6 +29,7 @@ class BackfillStatus(Schema):
     pages_last_day: int
     eta_hours: float | None
     deferred_until: datetime | None
+    paused: bool  # paused by the user (deferred_until is the quota wait)
 
 
 class LlmCallOut(Schema):
@@ -126,7 +128,8 @@ def _status(deps: ApiDeps) -> BackfillStatus:
         )
         next_at = s.scalar(
             select(func.min(Job.run_after)).where(
-                Job.kind == "backfill_page", Job.status == "queued", Job.run_id == p.run_id
+                Job.kind == "backfill_page", Job.status == "queued", Job.run_id == p.run_id,
+                or_(Job.last_error.is_(None), Job.last_error != PAUSED_REASON),
             )
         )
     total = _profile.total(deps)
@@ -147,6 +150,7 @@ def _status(deps: ApiDeps) -> BackfillStatus:
         progress=p, mailbox_total=total, percent=100.0 if p.fetch_done else percent,
         pages_last_hour=hour, pages_last_day=day, eta_hours=eta,
         deferred_until=next_at if next_at is not None and next_at > now else None,
+        paused=RuntimeSettings(deps.sf).backfill_paused(),
     )
 
 
@@ -155,12 +159,39 @@ def backfill(request: Request) -> BackfillStatus:
     return _status(get_deps(request))
 
 
-@router.post("/backfill/start")
-def backfill_start(request: Request) -> BackfillStatus:
-    deps = get_deps(request)
+def _start(deps: ApiDeps) -> None:
     run = deps.index_store.backfill_run(RUN_QUERY)
     if not run.fetch_done:
         deps.jobs.enqueue(BackfillPageJob(run_id=run.id, page_no=run.pages))
+
+
+@router.post("/backfill/start")
+def backfill_start(request: Request) -> BackfillStatus:
+    deps = get_deps(request)
+    _start(deps)
+    return _status(deps)
+
+
+@router.post("/backfill/pause")
+def backfill_pause(request: Request) -> BackfillStatus:
+    deps = get_deps(request)
+    RuntimeSettings(deps.sf, deps.clock).set_backfill_paused(True)
+    return _status(deps)
+
+
+@router.post("/backfill/resume")
+def backfill_resume(request: Request) -> BackfillStatus:
+    """Unpause; the page the worker parked for the pause runs now, not in 5 min."""
+    deps = get_deps(request)
+    RuntimeSettings(deps.sf, deps.clock).set_backfill_paused(False)
+    with deps.sf.begin() as s:
+        s.execute(
+            update(Job)
+            .where(Job.kind == "backfill_page", Job.status == "queued",
+                   Job.last_error == PAUSED_REASON)
+            .values(run_after=deps.clock(), last_error=None)
+        )
+    _start(deps)
     return _status(deps)
 
 

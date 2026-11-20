@@ -13,7 +13,7 @@ const LINKS: Array<{ to: string; label: string; icon: IconName }> = [
 
 export function MoreSheet({ onClose, onSignOut }: { onClose: () => void; onSignOut: () => void }) {
   const backfill = useBackfill()
-  const paused = backfill.data?.deferred_until != null
+  const paused = backfill.data ? backfill.data.paused || backfill.data.deferred_until !== null : false
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
