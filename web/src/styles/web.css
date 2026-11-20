@@ -1,0 +1,18 @@
+/* Rules the panel needs on top of the design's tokens/bundle/app.css. */
+
+button.ia-row { width: 100%; border: 0; background: none; color: var(--ink); text-align: left; font: inherit; }
+a.ia-row { color: var(--ink); }
+
+.switch-btn { border: 0; background: none; color: var(--ink); padding: 0; font: inherit; }
+.switch-btn__text { display: flex; flex-direction: column; text-align: left; }
+
+.empty-box { display: grid; gap: var(--space-3); justify-items: center; }
+
+.toast-host {
+  position: fixed; left: 0; right: 0; bottom: 24px; z-index: 40;
+  display: flex; justify-content: center; pointer-events: none;
+}
+.toast-host > * { pointer-events: auto; }
+@media (max-width: 639px) {
+  .toast-host { bottom: calc(var(--nav-bottom-height) + 16px); padding: 0 var(--space-4); }
+}

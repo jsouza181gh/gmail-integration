@@ -5,6 +5,7 @@ import './styles/fonts'
 import './styles/tokens.css'
 import './styles/bundle.css'
 import './styles/app.css'
+import './styles/web.css'
 import App from './App'
 
 const root = document.getElementById('root')
