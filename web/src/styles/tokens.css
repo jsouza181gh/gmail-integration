@@ -1,0 +1,24 @@
+/* Inbox Agent — generated from tokens.json */
+:root, [data-theme="dark"] {
+  --ember-50: #fff1ea; --ember-200: #ffc4a8; --ember-300: #ffa07a; --ember-400: #ff8c5f; --ember-500: #ff6b35; --ember-600: #e8541f;
+  --ember-800: #4d2410; --ember-900: #2a150c; --ember-ink: #ffffff;
+  --bg: #121212; --surface: #1c1c1c; --card: #232323; --raised: #2c2c2c; --raised-2: #383838; --line: #ffffff0d;
+  --ink: #f5f5f5; --ink-muted: #a8a8a8; --ink-subtle: #8a8a8a; --white: #ffffff;
+  --accent: var(--ember-500); --accent-soft: var(--ember-800); --accent-ink: var(--ember-400); --focus: var(--ember-300);
+
+  /* v1 names still used by artboards: aliases onto the one-hue palette */
+  --surface-0: var(--bg); --surface-1: var(--bg); --surface-2: var(--bg); --surface-3: var(--card);
+  --surface-4: var(--raised); --surface-5: var(--raised-2); --line-strong: #ffffff14; --ink-inverse: #121212;
+  --accent-hover: var(--ember-600); --accent-strong: var(--ember-500); --accent-strong-hover: var(--ember-600);
+  --warning: var(--ember-300); --warning-soft: var(--ember-800); --warning-ink: var(--ember-400);
+  --danger: var(--ember-600); --danger-soft: var(--ember-800); --danger-ink: var(--ember-400);
+  --info: var(--ink-muted); --info-soft: var(--raised); --info-ink: var(--ink-muted);
+  --shadow-inset: none; --shadow-knob: none; --shadow-raised: 0 16px 40px #00000099;
+}
+:root {
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
+  --radius-sm: 10px; --radius-md: 14px; --radius-lg: 24px; --radius-full: 9999px;
+  --nav-bottom-height: 68px; --nav-side-width: 232px; --control-height: 40px;
+  --font-sans: Outfit, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}

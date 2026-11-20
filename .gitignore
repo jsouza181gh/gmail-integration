@@ -10,3 +10,6 @@ scripts/export-emails.ps1
 exports/
 backups/
 .deploy/
+.superpowers/
+web/node_modules
+web/dist
