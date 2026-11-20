@@ -250,6 +250,42 @@ class ChatStore:
             conv.updated_at = now
         return self.turn(assistant_id)
 
+    def start_event_turn(self, conversation_id: int, text: str) -> TurnView | None:
+        """An `[evento]` message plus a queued answer; None when the conversation
+        is busy (the user already moved on)."""
+        now = self._now()
+        with self.sf.begin() as s:
+            conv = s.get(ChatConversation, conversation_id)
+            if conv is None:
+                raise LookupError("conversa não encontrada")
+            if self._busy(s, conversation_id):
+                return None
+            event = ChatMessage(conversation_id=conversation_id, role="user",
+                                text=text[:TEXT_MAX], input="event", status="done",
+                                created_at=now, updated_at=now)
+            s.add(event)
+            s.flush()
+            assistant_id = self._placeholder(s, conversation_id, event.id, now)
+            conv.updated_at = now
+        return self.turn(assistant_id)
+
+    def card_conversation(self, card_id: int) -> int | None:
+        with self.sf() as s:
+            return s.scalar(
+                select(ChatMessage.conversation_id)
+                .join(ChatCard, ChatCard.message_id == ChatMessage.id)
+                .where(ChatCard.id == card_id)
+            )
+
+    def card_action_kinds(self, card_id: int) -> tuple[str, ...]:
+        with self.sf() as s:
+            return tuple(s.scalars(
+                select(SuggestedAction.kind)
+                .join(ChatCardItem, ChatCardItem.action_id == SuggestedAction.id)
+                .where(ChatCardItem.card_id == card_id)
+                .order_by(ChatCardItem.position)
+            ))
+
     def _placeholder(self, s: Session, conversation_id: int, user_id: int, now: datetime) -> int:
         bot = ChatMessage(
             conversation_id=conversation_id,

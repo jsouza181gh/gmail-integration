@@ -64,9 +64,15 @@ test('sends_text_and_renders_streamed_progress_then_answer', async () => {
 })
 
 test('rule_card_confirm_with_existing_suggestions', async () => {
-  chatWith([message({}), message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [ruleCard] })])
   let body: unknown
+  const confirmed = { ...ruleCard, status: 'confirmed' as const, apply_existing: true }
+  const card = () => (body === undefined ? ruleCard : confirmed)
+  signedIn()
   server.use(
+    http.get('/api/chat/conversations', () => json([conversation])),
+    http.get('/api/chat/conversations/1/messages', () =>
+      json([message({}), message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [card()] })]),
+    ),
     http.post('/api/chat/cards/11/confirm', async ({ request }) => {
       body = await request.json()
       return json({ ...ruleCard, status: 'confirmed', apply_existing: true })
@@ -134,4 +140,31 @@ test('regras_shows_unless_document', async () => {
   )
   renderApp('/agente?aba=regras')
   expect(await screen.findByText(/exceto com documento/)).toBeInTheDocument()
+})
+
+test('confirm_refetches_and_renders_event_note_and_continuation', async () => {
+  let fetched = 0
+  const before = [message({}), message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [ruleCard] })]
+  const after = [
+    ...before.slice(0, 1),
+    message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [{ ...ruleCard, status: 'confirmed' }] }),
+    message({ id: 3, role: 'user', input: 'event', text: "[evento] O usuário confirmou o cartão #11: regra 'lixo' criada (#3)." }),
+    message({ id: 4, role: 'assistant', status: 'queued', text: '' }),
+  ]
+  signedIn()
+  server.use(
+    http.get('/api/chat/conversations', () => json([conversation])),
+    http.get('/api/chat/conversations/1/messages', () => json(fetched++ === 0 ? before : after)),
+    http.post('/api/chat/cards/11/confirm', () => json({ ...ruleCard, status: 'confirmed' })),
+    http.get('/api/chat/messages/4/stream', () =>
+      sse([turn({ id: 4, status: 'done', text: 'Regra criada; agora apago os 5.' }, { id: 3, input: 'event', text: "[evento] O usuário confirmou o cartão #11: regra 'lixo' criada (#3)." })]),
+    ),
+  )
+  const user = userEvent.setup()
+  renderApp('/chat')
+  await user.click(await screen.findByRole('button', { name: 'Confirmar' }))
+  const note = await screen.findByRole('note')
+  expect(note).toHaveTextContent("O usuário confirmou o cartão #11: regra 'lixo' criada (#3).")
+  expect(note).not.toHaveTextContent('[evento]')
+  expect(await screen.findByText('Regra criada; agora apago os 5.')).toBeInTheDocument()
 })

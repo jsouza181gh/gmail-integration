@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from src.agent.types import Verdict
 from src.api.deps import ApiDeps, get_deps, require_user
 from src.chat.audio import MAX_AUDIO_BYTES, parse_wav
+from src.chat.events import card_event
 from src.chat.store import (
     CardConflict,
     CardView,
@@ -157,12 +158,19 @@ def stream(message_id: int, request: Request) -> StreamingResponse:
 
 @router.post("/cards/{card_id}/confirm")
 def confirm(card_id: int, body: ConfirmIn, request: Request) -> CardView:
+    deps = get_deps(request)
     try:
-        return get_deps(request).cards.confirm(
-            card_id, apply_existing=body.apply_existing, verdict=body.verdict
-        )
+        view = deps.cards.confirm(card_id, apply_existing=body.apply_existing, verdict=body.verdict)
     except (CardConflict, LookupError, ValueError) as exc:
         raise _http(exc) from exc
+    # the agent picks the conversation back up (finishes what was asked, or says so)
+    conversation = deps.chat.card_conversation(card_id)
+    if conversation is not None:
+        text = card_event(view, deps.chat.card_action_kinds(card_id))
+        turn = deps.chat.start_event_turn(conversation, text)
+        if turn is not None:
+            _enqueue(deps, turn)
+    return view
 
 
 @router.post("/cards/{card_id}/cancel")

@@ -136,9 +136,14 @@ export function useChat() {
     [current, qc],
   )
 
+  // Confirming may start a continuation turn on the server: refetch so its
+  // event note shows and its live answer gets a stream.
   const confirm = useCallback(
-    async (cardId: number, opts: api.ConfirmOptions = {}) => replaceCard(await api.confirmCard(cardId, opts)),
-    [replaceCard],
+    async (cardId: number, opts: api.ConfirmOptions = {}) => {
+      replaceCard(await api.confirmCard(cardId, opts))
+      if (current !== null) await qc.invalidateQueries({ queryKey: messagesKey(current) })
+    },
+    [replaceCard, current, qc],
   )
   const cancel = useCallback(async (cardId: number) => replaceCard(await api.cancelCard(cardId)), [replaceCard])
 

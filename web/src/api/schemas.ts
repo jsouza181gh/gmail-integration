@@ -338,7 +338,7 @@ export const ChatMessage = z.object({
   conversation_id: int,
   role: z.enum(['user', 'assistant']),
   text: str,
-  input: z.enum(['text', 'audio']),
+  input: z.enum(['text', 'audio', 'event']),
   status: z.enum(['queued', 'running', 'done', 'failed']),
   progress: strN,
   error: strN,

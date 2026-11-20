@@ -29,6 +29,17 @@ function UserBubble({ m }: { m: ChatMessage }) {
   )
 }
 
+const EVENT_PREFIX = '[evento] '
+
+/** What the user did on a card, as the agent was told it: a quiet note, not a bubble. */
+function EventNote({ m }: { m: ChatMessage }) {
+  return (
+    <p role="note" className="t-small ia-subtle chat-event">
+      {m.text.startsWith(EVENT_PREFIX) ? m.text.slice(EVENT_PREFIX.length) : m.text}
+    </p>
+  )
+}
+
 function AssistantMessage({ m, h, onRetry }: { m: ChatMessage; h: CardHandlers; onRetry: (id: number) => void }) {
   const live = m.status === 'queued' || m.status === 'running'
   return (
@@ -85,7 +96,11 @@ export function MessageList({
     <div className="chat-thread" aria-live="polite">
       {messages.map((m) =>
         m.role === 'user' ? (
-          <UserBubble key={m.id} m={m} />
+          m.input === 'event' ? (
+            <EventNote key={m.id} m={m} />
+          ) : (
+            <UserBubble key={m.id} m={m} />
+          )
         ) : (
           <AssistantMessage key={m.id} m={m} h={h} onRetry={onRetry} />
         ),

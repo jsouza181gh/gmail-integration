@@ -175,3 +175,47 @@ def test_add_rule_unless_document(api: Api) -> None:
         "name": "lixo", "action": "trash", "sender_domain": "loja.com", "unless_document": True,
     })
     assert r.status_code == 200 and r.json()["unless_document"] is True
+
+
+def _answered_turn(api: Api, conv: int) -> int:
+    aid: int = api.client.post(f"/api/chat/conversations/{conv}/messages",
+                               json={"text": "regra"}).json()["assistant"]["id"]
+    api.deps.chat.begin(aid)
+    api.deps.chat.finish(aid, "Confere a regra?")
+    return aid
+
+
+def test_confirm_enqueues_continuation(api: Api) -> None:
+    conv = _conv(api)
+    aid = _answered_turn(api, conv)
+    card = api.deps.chat.add_card(aid, "chat", RuleDraft(
+        name="lixo", action="trash", sender_domain="loja.com", affected=0))
+    assert api.client.post(f"/api/chat/cards/{card}/confirm", json={}).status_code == 200
+    msgs = api.client.get(f"/api/chat/conversations/{conv}/messages").json()
+    event, placeholder = msgs[-2], msgs[-1]
+    assert event["input"] == "event" and event["role"] == "user"
+    assert event["text"].startswith(f"[evento] O usuário confirmou o cartão #{card}: regra 'lixo'")
+    assert placeholder["role"] == "assistant" and placeholder["status"] == "queued"
+    assert _jobs(api)[-1] == ("chat_turn", placeholder["id"])
+
+
+def test_confirm_when_busy_skips_continuation(api: Api) -> None:
+    conv = _conv(api)
+    aid = _answered_turn(api, conv)
+    card = api.deps.chat.add_card(aid, "chat", RuleDraft(
+        name="lixo", action="trash", sender_domain="loja.com", affected=0))
+    api.client.post(f"/api/chat/conversations/{conv}/messages", json={"text": "outra coisa"})
+    jobs = len(_jobs(api))
+    r = api.client.post(f"/api/chat/cards/{card}/confirm", json={})
+    assert r.status_code == 200 and r.json()["status"] == "confirmed"
+    assert len(_jobs(api)) == jobs
+
+
+def test_cancel_does_not_continue(api: Api) -> None:
+    conv = _conv(api)
+    aid = _answered_turn(api, conv)
+    card = api.deps.chat.add_card(aid, "chat", RuleDraft(
+        name="lixo", action="trash", sender_domain="loja.com", affected=0))
+    jobs = len(_jobs(api))
+    assert api.client.post(f"/api/chat/cards/{card}/cancel").status_code == 200
+    assert len(_jobs(api)) == jobs
