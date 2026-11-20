@@ -233,3 +233,12 @@ def test_missing_config_fails_turn(session_factory: sessionmaker[Session]) -> No
 @pytest.fixture(autouse=True)
 def _quiet_logs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.agent.flows.chat_turn.log", lambda msg: None)
+
+
+def test_chat_turn_quota_reason() -> None:
+    from src.agent.flows.chat_turn import _reason
+    from src.llm.errors import LLMExhaustedError
+
+    assert _reason(LLMExhaustedError("x", kinds=("quota",))) == (
+        "A cota de hoje acabou em todos os modelos do chat; volta às 05h."
+    )

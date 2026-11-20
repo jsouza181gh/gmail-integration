@@ -13,7 +13,9 @@ import re
 import threading
 import time
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import (
     AIMessage,
@@ -54,6 +56,11 @@ from src.utils.console import log
 
 # Where langchain-google-genai keeps Gemini 3 function-call thought signatures.
 SIGNATURES_KEY = "__gemini_function_call_thought_signatures__"
+# Gemini's documented stand-in when a function call's signature came from
+# another model (or was never produced by this one).
+NEUTRAL_SIGNATURE = "skip_thought_signature_validator"
+# Daily quotas reset at midnight Pacific time.
+QUOTA_TZ = ZoneInfo("America/Los_Angeles")
 BACKOFF_BASE_S = 3
 BACKOFF_MAX_S = 120
 # A 429 that asks for a longer wait means the quota (usually the daily one)
@@ -125,7 +132,18 @@ def _retry_delay(exc: BaseException) -> float | None:
 
 
 class _QuotaGone(Exception):
-    """A 429 whose advised wait exceeds RATE_WAIT_MAX_S."""
+    """A 429 for the daily quota, or one whose advised wait exceeds RATE_WAIT_MAX_S."""
+
+    def __init__(self, message: str, until: datetime) -> None:
+        super().__init__(message)
+        self.until = until
+
+
+def next_quota_reset(now: datetime) -> datetime:
+    """The next midnight in America/Los_Angeles, as UTC."""
+    local = now.astimezone(QUOTA_TZ)
+    midnight = datetime.combine(local.date() + timedelta(days=1), datetime.min.time(), QUOTA_TZ)
+    return midnight.astimezone(UTC)
 
 
 def _file_block(part: BinaryPart) -> dict[str, str]:
@@ -142,7 +160,7 @@ def _file_block(part: BinaryPart) -> dict[str, str]:
     }
 
 
-def _to_langchain(msg: ChatMessage) -> BaseMessage:
+def _to_langchain(msg: ChatMessage, model: str | None = None) -> BaseMessage:
     if msg.role == "system":
         return SystemMessage(content=msg.content)
     if msg.role == "human":
@@ -153,10 +171,13 @@ def _to_langchain(msg: ChatMessage) -> BaseMessage:
         return HumanMessage(content=msg.content)
     if msg.role == "tool":
         return ToolMessage(content=msg.content, tool_call_id=msg.tool_call_id or "")
+    sigs = dict(msg.signatures)
+    if sigs and msg.signatures_model is not None and model is not None and msg.signatures_model != model:
+        sigs = {k: NEUTRAL_SIGNATURE for k in sigs}
     return AIMessage(
         content=msg.content,
         tool_calls=[{"id": c.id, "name": c.name, "args": c.args} for c in msg.tool_calls],
-        additional_kwargs={SIGNATURES_KEY: dict(msg.signatures)} if msg.signatures else {},
+        additional_kwargs={SIGNATURES_KEY: sigs} if sigs else {},
     )
 
 
@@ -228,6 +249,7 @@ class LLMGateway:
         mode_source: Callable[[], Literal["free", "fast"]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wall: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if not models:
             raise ValueError("at least one model is required")
@@ -246,6 +268,21 @@ class LLMGateway:
         self._clock = clock
         self._lock = threading.Lock()
         self._last_call: float | None = None
+        self._wall = wall
+        # model -> when its daily quota comes back (shared by every lane)
+        self._exhausted: dict[str, datetime] = {}
+
+    def _available(self, models: Sequence[str]) -> tuple[str, ...]:
+        now = self._wall()
+        with self._lock:
+            for m in [m for m, until in self._exhausted.items() if until <= now]:
+                del self._exhausted[m]
+            return tuple(m for m in models if m not in self._exhausted)
+
+    def _mark_exhausted(self, model: str, until: datetime) -> None:
+        with self._lock:
+            self._exhausted[model] = until
+        log(f"cota de {model} esgotada até {until.isoformat()}; seguindo sem ele")
 
     def _chat(self, model: str) -> ChatModelLike:
         chats: dict[str, ChatModelLike] | None = getattr(self._local, "chats", None)
@@ -277,12 +314,23 @@ class LLMGateway:
             now = self._clock()
             self._last_call = now if self._last_call is None else max(self._last_call, now)
 
-    def _backoff(self, kind: ErrorKind, exc: BaseException, attempt: int, model: str) -> None:
+    def _backoff(
+        self, kind: ErrorKind, exc: BaseException, attempt: int, model: str, switching: bool
+    ) -> None:
+        """Wait before the next attempt; `switching` = it goes to another model,
+        which has its own limits, so only the quota check applies."""
         exp = min(BACKOFF_BASE_S * 2 ** attempt, BACKOFF_MAX_S)
+        delay = _retry_delay(exc) if kind == "rate" else None
         if kind == "rate":
-            delay = _retry_delay(exc)
+            if "PerDay" in str(exc):
+                raise _QuotaGone(f"cota diária esgotada em {model}",
+                                 next_quota_reset(self._wall())) from exc
             if delay is not None and delay > RATE_WAIT_MAX_S:
-                raise _QuotaGone(f"cota esgotada em {model} (pede {delay:.0f}s)") from exc
+                raise _QuotaGone(f"cota esgotada em {model} (pede {delay:.0f}s)",
+                                 self._wall() + timedelta(seconds=delay)) from exc
+        if switching:
+            return
+        if kind == "rate":
             seconds = (delay if delay is not None else exp) + 1
             why = f"429 em {model}"
         elif kind == "transient":
@@ -313,13 +361,21 @@ class LLMGateway:
 
         `call` gets the attempt's model name; `prompt` is what gets recorded.
         """
-        rotation = tuple(models or self.models)
+        chain = tuple(models or self.models)
         last_exc: BaseException | None = None
         kinds: list[ErrorKind] = []
         budget = min(prompt.attempts or self.max_attempts, self.max_attempts)
+        turn = 0  # position in the rotation of the models still available
 
         for attempt in range(budget):
-            model = rotation[attempt % len(rotation)]
+            rotation = self._available(chain)
+            if not rotation:
+                raise LLMExhaustedError(
+                    f"cota do dia esgotada em todos os modelos: {', '.join(chain)}",
+                    kinds=("quota",),
+                ) from last_exc
+            model = rotation[turn % len(rotation)]
+            turn += 1
             self._pace()
             started = self._clock()
             try:
@@ -348,10 +404,12 @@ class LLMGateway:
                 )
                 if kind == "fatal":
                     raise LLMFatalError(f"erro não recuperável ({model}): {exc}") from exc
+                switching = len(rotation) > 1
                 try:
-                    self._backoff(kind, exc, attempt, model)
+                    self._backoff(kind, exc, attempt, model, switching)
                 except _QuotaGone as gone:
-                    raise LLMExhaustedError(str(gone), kinds=("rate",)) from exc
+                    self._mark_exhausted(model, gone.until)
+                    turn -= 1  # the same position now holds the next model
                 continue
 
             self._mark_done()
@@ -401,9 +459,8 @@ class LLMGateway:
     def generate_turn(self, prompt: Prompt, tools: Sequence[BaseTool]) -> AssistantTurn:
         """One tool-calling turn. The caller executes the tools and loops."""
 
-        messages = [_to_langchain(m) for m in prompt.messages]
-
         def call(model: str) -> _Answer[AssistantTurn]:
+            messages = [_to_langchain(m, model) for m in prompt.messages]
             out = self._chat(model).bind_tools(tools).invoke(messages)
             if not isinstance(out, AIMessage):
                 raise _BadOutput(

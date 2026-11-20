@@ -36,6 +36,7 @@ ChatContextFactory = Callable[[RunScope, ChatScope], AgentContext]
 
 NOT_UNDERSTOOD = "Não entendi o áudio; tente de novo."
 OVERLOADED = "O Gemini está sobrecarregado agora. Tente de novo em instantes."
+NO_QUOTA = "A cota de hoje acabou em todos os modelos do chat; volta às 05h."
 TRUNCATED = "Parei antes de terminar. Pode reformular ou pedir de novo?"
 SUMMARY_MAX = 4000
 
@@ -52,6 +53,8 @@ def _reason(exc: BaseException) -> str:
     match exc:
         case _TurnFailed():
             return str(exc)
+        case LLMExhaustedError() if exc.kinds == ("quota",):
+            return NO_QUOTA
         case LLMExhaustedError():
             return OVERLOADED
         case LLMFatalError():

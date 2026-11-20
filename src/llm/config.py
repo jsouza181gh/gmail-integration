@@ -8,6 +8,12 @@ from src.llm.types import CallRecorder, Schema
 
 # 3.1 is the fallback: when 3.5 answers 503 the next attempt goes to 3.1.
 DEFAULT_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+# Chat: best first; a model out of its daily quota is skipped until it resets,
+# the flash-lite pair is the last resort.
+DEFAULT_CHAT_MODELS = (
+    "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,"
+    "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+)
 
 
 class LLMConfig(Schema):
@@ -18,12 +24,12 @@ class LLMConfig(Schema):
     embed_model: str
 
 
+def _models(var: str, default: str) -> tuple[str, ...]:
+    return tuple(m.strip() for m in os.getenv(var, default).split(",") if m.strip())
+
+
 def load_llm_config() -> LLMConfig:
-    models = tuple(
-        m.strip()
-        for m in os.getenv("GEMINI_MODELS", DEFAULT_MODELS).split(",")
-        if m.strip()
-    )
+    models = _models("GEMINI_MODELS", DEFAULT_MODELS)
     return LLMConfig.model_validate(
         {
             "models": models,
@@ -40,6 +46,31 @@ def build_gateway(
     mode_source: Callable[[], Literal["free", "fast"]] | None = None,
 ) -> LLMGateway:
     cfg = load_llm_config()
+    return LLMGateway(
+        cfg.models,
+        mode=cfg.mode,
+        rpm=cfg.rpm,
+        max_attempts=cfg.max_attempts,
+        embed_model=cfg.embed_model,
+        mode_source=mode_source,
+        recorder=recorder,
+    )
+
+
+def load_chat_config() -> LLMConfig:
+    """Same knobs as the main gateway, with the chat's model chain."""
+    return load_llm_config().model_copy(
+        update={"models": _models("CHAT_MODELS", DEFAULT_CHAT_MODELS)}
+    )
+
+
+def build_chat_gateway(
+    recorder: CallRecorder | None = None,
+    mode_source: Callable[[], Literal["free", "fast"]] | None = None,
+) -> LLMGateway:
+    """The chat's own gateway: its own pacing and quota memory, so a busy
+    triage never delays an answer and vice versa."""
+    cfg = load_chat_config()
     return LLMGateway(
         cfg.models,
         mode=cfg.mode,
