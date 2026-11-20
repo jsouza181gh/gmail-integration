@@ -63,6 +63,9 @@ NEUTRAL_SIGNATURE = "skip/thought/signature/validator"
 # After a fallback answers, later calls start there for a while instead of
 # knocking on the overloaded models above it first.
 STICKY_S = 600
+# A model that just timed out / 503'd sits out this long (unless every model
+# of the chain is sitting out).
+COOLDOWN_S = 300
 # Daily quotas reset at midnight Pacific time.
 QUOTA_TZ = ZoneInfo("America/Los_Angeles")
 BACKOFF_BASE_S = 3
@@ -277,12 +280,14 @@ class LLMGateway:
         self._sleep = sleep
         self._clock = clock
         self._lock = threading.Lock()
-        self._last_call: float | None = None
+        self._last_call: dict[str, float] = {}
         self._wall = wall
         # model -> when its daily quota comes back (shared by every lane)
         self._exhausted: dict[str, datetime] = {}
         # the model that answered last and until when calls start with it
         self._sticky: tuple[str, datetime] | None = None
+        # model -> until when it sits out after a transient failure
+        self._cooling: dict[str, datetime] = {}
 
     def _available(self, models: Sequence[str]) -> tuple[str, ...]:
         now = self._wall()
@@ -292,7 +297,10 @@ class LLMGateway:
                 del self._exhausted[m]
             if freed:  # a better model is back: start from the top again
                 self._sticky = None
+            for m in [m for m, until in self._cooling.items() if until <= now]:
+                del self._cooling[m]
             ok = tuple(m for m in models if m not in self._exhausted)
+            ok = tuple(m for m in ok if m not in self._cooling) or ok
             if self._sticky is not None:
                 model, until = self._sticky
                 if until <= now or model not in ok:
@@ -322,27 +330,29 @@ class LLMGateway:
             chats[model] = self._chat_factory(model)
         return chats[model]
 
-    def _pace(self) -> None:
-        """Free mode: reserve the next slot under the lock, then wait for it.
+    def _pace(self, model: str) -> None:
+        """Free mode: reserve the model's next slot under the lock, then wait.
 
-        Several threads (worker lanes) share one gateway, so each caller
-        books its own start time and the RPM holds across all of them.
+        Free-tier limits are per model, so each model has its own spacing;
+        several threads (worker lanes) share one gateway and book slots here.
         """
         mode = self.mode_source() if self.mode_source is not None else self.mode
         with self._lock:
             now = self._clock()
-            if mode != "free" or self._last_call is None:
-                self._last_call = now
+            last = self._last_call.get(model)
+            if mode != "free" or last is None:
+                self._last_call[model] = now
                 return
-            wait = max(0.0, self.min_interval_s - (now - self._last_call))
-            self._last_call = now + wait
+            wait = max(0.0, self.min_interval_s - (now - last))
+            self._last_call[model] = now + wait
         if wait > 0:
             self._sleep(wait)
 
-    def _mark_done(self) -> None:
+    def _mark_done(self, model: str) -> None:
         with self._lock:
             now = self._clock()
-            self._last_call = now if self._last_call is None else max(self._last_call, now)
+            last = self._last_call.get(model)
+            self._last_call[model] = now if last is None else max(last, now)
 
     def _backoff(
         self, kind: ErrorKind, exc: BaseException, attempt: int, model: str, switching: bool
@@ -395,7 +405,7 @@ class LLMGateway:
         last_exc: BaseException | None = None
         kinds: list[ErrorKind] = []
         budget = min(prompt.attempts or self.max_attempts, self.max_attempts)
-        turn = 0  # position in the rotation of the models still available
+        cycle: set[str] = set()  # models tried since the last back-off
 
         for attempt in range(budget):
             rotation = self._available(chain)
@@ -404,14 +414,18 @@ class LLMGateway:
                     f"cota do dia esgotada em todos os modelos: {', '.join(chain)}",
                     kinds=("quota",),
                 ) from last_exc
-            model = rotation[turn % len(rotation)]
-            turn += 1
-            self._pace()
+            fresh = [m for m in rotation if m not in cycle]
+            if not fresh:  # every available model failed once: start over
+                cycle.clear()
+                fresh = list(rotation)
+            model = fresh[0]
+            cycle.add(model)
+            self._pace(model)
             started = self._clock()
             try:
                 answer = call(model)
             except (Exception, ValidationError) as exc:  # noqa: BLE001 - classified below
-                self._mark_done()
+                self._mark_done(model)
                 ended = self._clock()
                 last_exc = exc
                 kind = _error_kind(exc)
@@ -435,19 +449,21 @@ class LLMGateway:
                 with self._lock:
                     if self._sticky is not None and self._sticky[0] == model:
                         self._sticky = None  # it stopped answering: back to the top
+                    cools = kind in ("rate", "transient") and len(chain) > 1
+                    if cools:
+                        self._cooling[model] = self._wall() + timedelta(seconds=COOLDOWN_S)
                 if kind == "fatal":
                     raise LLMFatalError(f"erro não recuperável ({model}): {exc}") from exc
-                # back off only when the next attempt starts the rotation over
-                switching = turn % len(rotation) != 0
+                # back off only when no untried model is left in this cycle
+                switching = any(m not in cycle for m in self._available(chain))
                 try:
                     self._backoff(kind, exc, attempt, model, switching)
                 except _QuotaGone as gone:
                     self._mark_exhausted(model, gone.until)
-                    turn -= 1  # the same position now holds the next model
                 continue
 
             self._stick(model, chain)
-            self._mark_done()
+            self._mark_done(model)
             ended = self._clock()
             self._record(
                 CallRecord(

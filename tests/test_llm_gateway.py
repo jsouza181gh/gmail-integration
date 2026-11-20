@@ -520,7 +520,7 @@ def test_pace_reserves_slots_across_threads() -> None:
     g = LLMGateway(["m1"], mode="free", rpm=15, chat_factory=lambda m: FakeChat([]),
                    sleep=sleeps.append, clock=lambda: 0.0)
     for _ in range(3):
-        t = threading.Thread(target=g._pace)
+        t = threading.Thread(target=g._pace, args=("m1",))
         t.start()
         t.join()
     assert sleeps == [4.0, 8.0]
@@ -673,4 +673,25 @@ def test_chat_gateway_uses_short_timeout(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setenv("GOOGLE_API_KEY", "x")
     client = build_chat_gateway()._chat_factory("gemini-3.6-flash")
-    assert CHAT_TIMEOUT_S == 30 and getattr(client, "timeout") == 30
+    assert CHAT_TIMEOUT_S == 15 and getattr(client, "timeout") == 15
+
+
+def test_failed_model_cools_down_for_five_minutes() -> None:
+    wall = Wall()
+    chats = {
+        "A": FakeChat([RuntimeError("503 UNAVAILABLE"), Out(x=9)]),
+        "B": FakeChat([Out(x=1), RuntimeError("503 UNAVAILABLE")]),
+        "C": FakeChat([Out(x=2)]),
+    }
+    g = gw(models=["A", "B", "C"], chats=chats, wall=wall)
+    assert g.generate_structured(P, Out).model == "B"
+    assert g.generate_structured(P, Out).model == "C"  # B fails; A still cooling
+    wall.at = wall.at + timedelta(minutes=11)
+    assert g.generate_structured(P, Out).model == "A"
+
+
+def test_free_mode_paces_per_model() -> None:
+    clock = FakeClock()
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE")]), "B": FakeChat([Out(x=1)])}
+    gw(mode="free", rpm=15, clock=clock, models=["A", "B"], chats=chats).generate_structured(P, Out)
+    assert clock.slept == []  # B has its own per-minute quota: no wait after A

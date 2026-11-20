@@ -10,6 +10,8 @@ from src.agent.types import EmailRef, MailQuery
 from src.llm.types import Schema
 
 MAX_RESULTS_LIMIT = 100
+# in the chat a person waits for the answer: counting uses resultSizeEstimate
+CHAT_LIST_MAX = 25
 
 
 class BodyCtx(Deps):
@@ -76,15 +78,17 @@ def list_emails(
             spaces, OR, - and parentheses.
         label_ids: Label IDs every message must have, e.g. ["INBOX",
             "UNREAD"] or custom IDs from list_labels.
-        max_results: Number of emails to return (1-100). Default 10.
+        max_results: Number of emails to return (1-100; at most 25 in the chat).
+            Default 10. For counts use result_size_estimate, not a big page.
         page_token: nextPageToken from a previous call.
         include_spam_trash: Also search SPAM and TRASH.
     """
+    limit = MAX_RESULTS_LIMIT if runtime.context.message_id is None else CHAT_LIST_MAX
     page = runtime.context.mail.list_messages(
         MailQuery(
             query=query,
             label_ids=tuple(label_ids or ()),
-            max_results=max(1, min(max_results, MAX_RESULTS_LIMIT)),
+            max_results=max(1, min(max_results, limit)),
             page_token=page_token,
             include_spam_trash=include_spam_trash,
         )

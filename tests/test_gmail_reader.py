@@ -110,3 +110,38 @@ def test_item_404_returns_none() -> None:
         raise http_error(404)
 
     assert _reader(FakeService(messages__get=get)).item("gone") is None
+
+
+class _Batch:
+    def __init__(self, svc: "BatchService") -> None:
+        self.svc = svc
+        self.items: list[tuple[object, object]] = []
+
+    def add(self, request: object, callback: object) -> None:
+        self.items.append((request, callback))
+
+    def execute(self) -> None:
+        self.svc.batches += 1
+        for i, (req, cb) in enumerate(self.items):
+            cb(str(i), req.execute(), None)  # type: ignore[attr-defined,operator]
+
+
+class BatchService(FakeService):
+    batches = 0
+
+    def new_batch_http_request(self) -> _Batch:
+        return _Batch(self)
+
+
+def test_list_fetches_metadata_in_one_batch() -> None:
+    def get(**kw: object) -> dict[str, object]:
+        return {"id": kw["id"], "threadId": "t", "labelIds": ["SPAM"], "snippet": "x",
+                "payload": {"headers": [{"name": "Subject", "value": f"s{kw['id']}"}]}}
+
+    svc = BatchService(
+        messages__list=lambda **kw: {"messages": [{"id": f"m{i}"} for i in range(30)]},
+        messages__get=get,
+    )
+    page = _reader(svc).list_messages(MailQuery(query="in:spam", max_results=30))
+    assert [i.id for i in page.items] == [f"m{i}" for i in range(30)]
+    assert svc.batches == 1

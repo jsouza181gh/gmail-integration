@@ -334,3 +334,9 @@ def test_propose_rule_unseen_sender_without_close_match_is_allowed(w: ChatWorld)
                                  "sender_address": "promo@desconhecido.com.br"})
     assert res.ok and "nenhum e-mail de promo@desconhecido.com.br guardado ainda" in res.message.content
     assert w.cards() == ["rule"]
+
+
+def test_list_emails_in_chat_caps_at_25(w: ChatWorld) -> None:
+    w.mail.items = {f"q{i}": spam_item(f"q{i}") for i in range(60)}
+    assert w.run("list_emails", {"query": "in:spam", "max_results": 100}).ok
+    assert w.mail.queries[-1].max_results == 25

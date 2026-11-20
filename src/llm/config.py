@@ -14,9 +14,9 @@ DEFAULT_CHAT_MODELS = (
     "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,"
     "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
 )
-# A chat answer waits for the user: an overloaded model is dropped after 30 s
-# instead of the 90 s background jobs can afford.
-CHAT_TIMEOUT_S = 30
+# A chat answer waits for the user: an overloaded model is dropped after 15 s
+# (good answers take 2-11 s) instead of the 90 s background jobs can afford.
+CHAT_TIMEOUT_S = 15
 
 
 class LLMConfig(Schema):
