@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router'
 import Aprovacoes from './pages/Aprovacoes'
 import Caixa from './pages/Caixa'
 import Chat from './pages/Chat'
+import Documentos from './pages/Documentos'
 import Login from './pages/Login'
 import Relevantes from './pages/Relevantes'
 import { RequireAuth } from './shell/RequireAuth'
@@ -25,7 +26,7 @@ export function AppRoutes() {
         <Route path="caixa" element={<Caixa />} />
         <Route path="caixa/:emailId" element={<Caixa />} />
         <Route path="aprovacoes" element={<Aprovacoes />} />
-        <Route path="documentos" element={<Soon title="Documentos" />} />
+        <Route path="documentos" element={<Documentos />} />
         <Route path="chat" element={<Chat />} />
         <Route path="agente" element={<Soon title="Agente" />} />
         <Route path="execucoes" element={<Soon title="Execuções" />} />

@@ -71,3 +71,20 @@ button.ia-bottomnav__item { border: 0; background: none; cursor: pointer; }
 .group-card__item { grid-template-columns: auto 1fr auto; align-items: center; cursor: default; }
 .group-card__item:hover { background: var(--raised); }
 .batch-bar { position: sticky; bottom: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; box-shadow: var(--shadow-raised); background: var(--raised); }
+
+/* Documentos */
+.doc-row { display: grid; grid-template-columns: 36px minmax(0, 2.2fr) minmax(0, 1.2fr) 110px 120px auto; gap: 16px; align-items: center; padding: 12px 16px; }
+.doc-row:hover { background: var(--raised); }
+.doc-head { color: var(--ink-subtle); font-size: 12px; padding-block: 10px; }
+.doc-head:hover { background: transparent; }
+.doc-row__icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--raised); }
+.doc-row__main { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.doc-row__title { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-row__ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-meta-sm { display: none; }
+@media (max-width: 900px) {
+  .doc-row { grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .doc-row .doc-col-issuer, .doc-row .doc-col-amount, .doc-row .doc-col-due { display: none; }
+  .doc-head { display: none; }
+  .doc-row .doc-meta-sm { display: block; }
+}
