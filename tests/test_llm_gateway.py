@@ -727,3 +727,14 @@ def test_backfill_gateway_uses_the_backfill_key(monkeypatch: pytest.MonkeyPatch)
     assert bf._chat_factory("gemini-3.5-flash-lite").google_api_key.get_secret_value() == "bf-key"  # type: ignore[attr-defined]
     assert chat._chat_factory("gemini-3.6-flash").google_api_key.get_secret_value() == "app-key"  # type: ignore[attr-defined]
     assert bf._embedder._api_key == "bf-key"  # type: ignore[attr-defined]
+
+
+def test_under_pressure_while_a_model_is_paused() -> None:
+    wall = Wall()
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE")]), "B": FakeChat([Out(x=1)])}
+    g = gw(models=["A", "B"], chats=chats, wall=wall)
+    assert not g.under_pressure()
+    g.generate_structured(P, Out)
+    assert g.under_pressure()
+    wall.at = wall.at + timedelta(minutes=6)
+    assert not g.under_pressure()

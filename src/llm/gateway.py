@@ -319,6 +319,15 @@ class LLMGateway:
                     ok = ok[start:] + ok[:start]
             return ok
 
+    def under_pressure(self) -> bool:
+        """Some model of the chain is paused (503/timeout) or out of its daily
+        quota: the backfill's turbo leaves this key to the app."""
+        self._available(self.models)  # drops expired pauses/quotas
+        with self._lock:
+            return any(m in self._cooling or m in self._exhausted for m in self.models) or (
+                self.embed_model in self._cooling or self.embed_model in self._exhausted
+            )
+
     def _stick(self, model: str, chain: Sequence[str]) -> None:
         with self._lock:
             self._sticky = (
