@@ -193,12 +193,12 @@ test('model_picker_pins_the_model_of_the_turn', async () => {
   await waitFor(() => expect(sent[1]).toEqual({ text: 'oi', model: 'gemini-3.6-flash' }))
 })
 
-test('failed_model_calls_are_toasted', async () => {
-  chatWith([message({}), message({ id: 2, role: 'assistant', status: 'running', progress: 'pensando…' })])
+test('failed_model_calls_are_toasted_when_the_model_was_pinned', async () => {
+  chatWith([message({ model: 'gemini-3.6-flash' }), message({ id: 2, role: 'assistant', status: 'running', progress: 'pensando…' })])
   server.use(
     http.get('/api/chat/messages/2/stream', () =>
       sse([
-        turn({ status: 'running', failures: [{ model: 'gemini-3.8-flash', reason: 'não respondeu a tempo' }] }),
+        turn({ status: 'running', failures: [{ model: 'gemini-3.8-flash', reason: 'não respondeu a tempo' }] }, { model: 'gemini-3.6-flash' }),
         turn({
           status: 'done',
           text: 'Pronto.',
@@ -206,11 +206,24 @@ test('failed_model_calls_are_toasted', async () => {
             { model: 'gemini-3.8-flash', reason: 'não respondeu a tempo' },
             { model: 'gemini-3.6-flash', reason: 'sobrecarregado (503)' },
           ],
-        }),
+        }, { model: 'gemini-3.6-flash' }),
       ]),
     ),
   )
   renderApp('/chat')
   expect(await screen.findByText('Pronto.')).toBeInTheDocument()
   expect(await screen.findByText(/gemini-3\.6-flash: sobrecarregado \(503\)/)).toBeInTheDocument()
+})
+
+
+test('automatic_mode_does_not_toast_failed_calls', async () => {
+  chatWith([message({}), message({ id: 2, role: 'assistant', status: 'running', progress: 'pensando…' })])
+  server.use(
+    http.get('/api/chat/messages/2/stream', () =>
+      sse([turn({ status: 'done', text: 'Pronto.', failures: [{ model: 'gemini-3.8-flash', reason: 'não respondeu a tempo' }] })]),
+    ),
+  )
+  renderApp('/chat')
+  expect(await screen.findByText('Pronto.')).toBeInTheDocument()
+  expect(screen.queryByText(/gemini-3\.8-flash: não respondeu a tempo/)).toBeNull()
 })

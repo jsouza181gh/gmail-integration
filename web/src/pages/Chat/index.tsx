@@ -40,12 +40,19 @@ function writeModel(model: string | null) {
 const LIVE = new Set(['queued', 'running'])
 
 /** Toasts each model call that failed while an answer was in flight, and the
- * answer's own failure; history loaded with the page stays quiet. */
+ * answer's own failure - only when the user pinned a model for the turn (in
+ * Automático the chain falls back silently); history loaded with the page
+ * stays quiet. */
 function useFailureToasts(messages: ChatMessage[], show: (text: string) => void) {
   const watched = useRef(new Map<number, number>())
   useEffect(() => {
+    let pinned: string | null = null
     for (const m of messages) {
-      if (m.role !== 'assistant') continue
+      if (m.role === 'user') {
+        pinned = m.model
+        continue
+      }
+      if (!pinned) continue
       const seen = watched.current.get(m.id)
       if (seen === undefined) {
         if (LIVE.has(m.status)) watched.current.set(m.id, m.failures.length)
