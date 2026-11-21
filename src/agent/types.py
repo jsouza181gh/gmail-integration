@@ -167,6 +167,10 @@ class ActionsDraft(Schema):
     action_ids: tuple[int, ...]
     verdict: Verdict | None = None
     comment: str | None = None
+    action: ActionKind | None = None  # proposals of one action (propose_email_actions)
+    batch_query: str | None = None  # the Gmail search this batch came from
+    batch_total: int | None = None  # its estimated size
+    batch_no: int | None = None  # 1-based
 
 
 class EmailsDraft(Schema):

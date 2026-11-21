@@ -340,3 +340,36 @@ def test_list_emails_in_chat_caps_at_25(w: ChatWorld) -> None:
     w.mail.items = {f"q{i}": spam_item(f"q{i}") for i in range(60)}
     assert w.run("list_emails", {"query": "in:spam", "max_results": 100}).ok
     assert w.mail.queries[-1].max_results == 25
+
+
+def test_batch_by_query_records_batch_metadata(w: ChatWorld) -> None:
+    w.mail.items = {f"q{i}": spam_item(f"q{i}") for i in range(120)}
+    w.mail.page_size = 40
+    first = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
+                                            "gmail_query": "in:spam"})
+    assert first.ok and "lote 1 de 3 (50 de ~120 e-mails da busca 'in:spam')" in first.message.content
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert (card.batch_no, card.batch_total, card.batch_query) == (1, 120, "in:spam")
+    assert w.mail.fetched == []  # the search already brought them: no Gmail call per id
+    again = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
+                                            "gmail_query": "in:spam"})
+    assert "lote 1 de 3" in again.message.content  # card 1 not confirmed: still batch 1
+    with w.sf.begin() as s:
+        from src.db.models import ChatCard
+        s.get_one(ChatCard, card.id).status = "confirmed"
+    second = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
+                                             "gmail_query": "in:spam"})
+    assert "lote 2 de 3" in second.message.content
+
+
+def test_small_search_is_a_single_batch(w: ChatWorld) -> None:
+    res = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
+                                          "gmail_query": "in:spam"})
+    assert res.ok and "lote 1 de 1 (2 de ~2 e-mails" in res.message.content
+
+
+def test_chat_prompt_v3_announces_batches_and_reports_results() -> None:
+    from src.agent.prompts import CHAT_PROMPT_V3
+
+    assert "lotes de 50" in CHAT_PROMPT_V3 and "concluído" in CHAT_PROMPT_V3
+    assert "propose_email_actions" in CHAT_PROMPT_V3

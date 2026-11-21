@@ -88,7 +88,7 @@ def test_seed_agent_config_v1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         rows = c.execute(
             text("select version, active, max_turns from agent_configs order by version")
         ).all()
-    assert [tuple(r) for r in rows] == [(1, False, 4), (2, True, 4)]
+    assert [tuple(r) for r in rows] == [(1, False, 4), (2, False, 4), (3, True, 4)]
 
 
 def test_chat_columns_and_seeded_chat_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,7 +128,11 @@ def test_migration_0016_activates_v2_and_rolls_back(
         active = c.execute(text("select version, chat_prompt, decide_prompt from agent_configs"
                                 " where active")).one()
         v1_decide = c.execute(text("select decide_prompt from agent_configs where version = 1")).scalar()
-    assert active[0] == 2 and active[1] == CHAT_PROMPT_V2 and active[2] == v1_decide
+    assert active[0] == 3 and active[2] == v1_decide
+    command.downgrade(cfg, "0019")
+    with create_engine(url).connect() as c:
+        v2 = c.execute(text("select version, chat_prompt from agent_configs where active")).one()
+    assert v2[0] == 2 and v2[1] == CHAT_PROMPT_V2
     command.downgrade(cfg, "0015")
     with create_engine(url).connect() as c:
         rows = c.execute(text("select version, active from agent_configs")).all()
@@ -149,3 +153,12 @@ def test_migration_0018_backfill_attachment_constraint(
             " '2026-11-21', 'k', '2026-11-21')"
         ))
     command.downgrade(cfg, "0017")
+
+
+def test_migration_0020_activates_chat_prompt_v3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.agent.prompts import CHAT_PROMPT_V3
+
+    _, url = _upgraded(tmp_path, monkeypatch)
+    with create_engine(url).connect() as c:
+        prompt = c.execute(text("select chat_prompt from agent_configs where active")).scalar()
+    assert prompt == CHAT_PROMPT_V3

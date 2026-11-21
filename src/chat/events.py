@@ -30,3 +30,4 @@ def card_event(view: CardView, action_kinds: Sequence[str] = ()) -> str:
                     " a execução foi enfileirada.")
         case _:
             return f"{head} {view.kind}."
+

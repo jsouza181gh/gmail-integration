@@ -24,6 +24,9 @@ const baseCard: ChatCard = {
   created_rule_id: null,
   kb_entry_id: null,
   items: [],
+  batch_query: null,
+  batch_total: null,
+  batch_no: null,
 }
 
 export function card(over: Partial<ChatCard>): ChatCard {

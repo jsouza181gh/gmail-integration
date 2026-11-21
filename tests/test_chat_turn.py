@@ -257,3 +257,27 @@ def test_event_turn_keeps_the_chosen_model(session_factory: sessionmaker[Session
     w.handle(first.assistant.id)
     event = w.store.start_event_turn(w.conv, "[evento] x")
     assert event is not None and event.user.model == "gemini-3.6-flash"
+
+
+def test_batch_result_opens_the_answer(session_factory: sessionmaker[Session]) -> None:
+    w = World(session_factory, [])  # no model call: the reply is built from the facts
+    first = w.store.start_turn(w.conv, text="apaga o spam")
+    w.store.begin(first.assistant.id)
+    w.store.finish(first.assistant.id, "Lote 1 de 5.")
+    event = w.store.start_event_turn(
+        w.conv, "[evento] Lote 1 de 5 concluído (cartão #3): 49 e-mail(s) apagado(s), 1 falhou"
+        " (404). Restam ~151 na busca 'in:spam'.")
+    assert event is not None
+    w.handle(event.assistant.id)
+    assert w.store.turn(event.assistant.id).assistant.text == (
+        "Lote 1 de 5 concluído (cartão #3): 49 e-mail(s) apagado(s), 1 falhou (404)."
+        " Restam ~151 na busca 'in:spam'.\n\nQuer que eu prepare o lote 2 de 5?"
+    )
+
+
+def test_other_events_are_not_prefixed(session_factory: sessionmaker[Session]) -> None:
+    w = World(session_factory, [turn("Ok.")])
+    event = w.store.start_event_turn(w.conv, "[evento] O usuário confirmou o cartão #1: preferência salva.")
+    assert event is not None
+    w.handle(event.assistant.id)
+    assert w.store.turn(event.assistant.id).assistant.text == "Ok."

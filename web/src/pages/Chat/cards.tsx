@@ -209,11 +209,19 @@ function PolicyCard({ card, h }: { card: ChatCard; h: CardHandlers }) {
   )
 }
 
+/** "Lote 1 de 5 · 50 de ~201 e-mails" for a batch proposed from a Gmail search. */
+function batchLabel(card: ChatCard): string | null {
+  if (card.batch_no === null || card.batch_total === null) return null
+  const batches = Math.max(card.batch_no, Math.ceil(card.batch_total / 50))
+  return `Lote ${card.batch_no} de ${batches} · ${card.items.length} de ~${card.batch_total} e-mails`
+}
+
 function ActionsCard({ card, h }: { card: ChatCard; h: CardHandlers }) {
   const [busy, run] = useBusy()
   const n = card.items.length
+  const batch = batchLabel(card)
   return (
-    <Shell label={n === 1 ? 'Sugestão' : `${n} sugestões`} card={card}>
+    <Shell label={batch ?? (n === 1 ? 'Sugestão' : `${n} sugestões`)} card={card}>
       <div className="chat-card__list">
         {card.items.map((it) => (
           <div key={it.action_id} className="ia-row chat-card__item">

@@ -91,6 +91,7 @@ def main() -> None:
         log(f"job {job.id} ({job.payload.kind}) foi para dead-letter: {error[:200]}")
         if isinstance(job.payload, ExecuteActionJob):
             agent.approvals.mark_failed(job.payload.action_id, f"desistiu após retries: {error}")
+            agent.card_waiter.on_action_settled(job.payload.action_id)
         if isinstance(job.payload, ChatTurnJob):
             agent.chat_store.fail(job.payload.message_id, "Erro interno; tente de novo.")
         alerts.alert(

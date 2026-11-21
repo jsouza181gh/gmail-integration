@@ -738,3 +738,35 @@ def test_under_pressure_while_a_model_is_paused() -> None:
     assert g.under_pressure()
     wall.at = wall.at + timedelta(minutes=6)
     assert not g.under_pressure()
+
+
+class SlowRunnable:
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+
+    def invoke(self, messages: list[BaseMessage], /) -> object:
+        import time as _t
+
+        _t.sleep(self.seconds)
+        raw = AIMessage(content='{"x": 1}')
+        return {"raw": raw, "parsed": Out(x=1), "parsing_error": None}
+
+
+class SlowChat(FakeChat):
+    def __init__(self, seconds: float) -> None:
+        super().__init__([])
+        self.slow = SlowRunnable(seconds)
+
+    def with_structured_output(self, schema: type[BaseModel], *, include_raw: bool) -> SlowRunnable:  # type: ignore[override]
+        return self.slow
+
+
+def test_attempt_wall_clock_timeout_moves_on() -> None:
+    import time as _t
+
+    chats = {"A": SlowChat(3.0), "B": FakeChat([Out(x=2)])}
+    g = LLMGateway(["A", "B"], mode="fast", chat_factory=chats.__getitem__,
+                   recorder=ListRecorder(), call_timeout_s=0.2, sleep=lambda s: None)
+    started = _t.monotonic()
+    assert g.generate_structured(P, Out).model == "B"
+    assert _t.monotonic() - started < 2.0

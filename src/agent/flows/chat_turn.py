@@ -25,6 +25,7 @@ from src.agent.prompts import (
 from src.agent.state import AgentState
 from src.agent.trail import RunStatus, Trail
 from src.agent.types import ChatChannel
+from src.chat.batches import done_reply
 from src.chat.store import ChatStore
 from src.db.rows import AgentConfigRow
 from src.jobs.types import ChatTurnJob, ClaimedJob
@@ -125,6 +126,10 @@ class ChatTurnFlow:
         ctx = self.context_factory(
             RunScope(run_id=run_id, trigger="chat", config_id=config.id), scope
         )
+        # A finished card: the answer is the facts plus the next step, built here;
+        # the model is not asked (it tended to propose the next batch unasked).
+        if user.input == "event" and (reply := done_reply(user.text)) is not None:
+            return "done", reply
         text = user.text
         if user.input == "audio" and not text:
             text = self._transcribe(message_id, user.id, ctx, user.model)

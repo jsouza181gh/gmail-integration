@@ -274,3 +274,24 @@ def test_turn_view_lists_failed_calls(api: Api) -> None:
         {"model": "gemini-3.8-flash", "reason": "não respondeu a tempo"},
         {"model": "gemini-3.7-flash", "reason": "sobrecarregado (503)"},
     ]
+
+
+def test_approving_actions_waits_for_execution(api: Api) -> None:
+    from src.chat.continuation import CardWaiter
+    from src.db.models import SuggestedAction
+
+    add_email(api.sf, "e1")
+    conv = _conv(api)
+    aid = _answered_turn(api, conv)
+    with api.sf.begin() as s:
+        s.add(SuggestedAction(id=7, email_id="e1", kind="trash", reason="x", status="pending",
+                              origin="agent", created_at=api.clock()))
+    card = api.deps.chat.add_card(aid, "chat", ActionsDraft(action_ids=(7,), action="trash"))
+    r = api.client.post(f"/api/chat/cards/{card}/confirm", json={"verdict": "approve"})
+    assert r.status_code == 200
+    msgs = api.client.get(f"/api/chat/conversations/{conv}/messages").json()
+    assert msgs[-1]["status"] == "queued" and msgs[-1]["progress"] == "apagando… 0/1"
+    assert [k for k, _ in _jobs(api)].count("chat_turn") == 1  # only the first turn's job
+    api.deps.approvals.mark_executed(7)
+    CardWaiter(api.deps.chat, api.deps.jobs).on_action_settled(7)
+    assert _jobs(api)[-1] == ("chat_turn", msgs[-1]["id"])

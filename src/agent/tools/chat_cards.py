@@ -6,6 +6,7 @@ card on the turn in progress and the user confirms it in the panel
 normal action sink, so it obeys the chat policies like any proposal.
 """
 from collections import Counter
+from math import ceil
 from email.utils import parseaddr
 
 from langchain.tools import ToolRuntime
@@ -35,6 +36,7 @@ from src.agent.types import (
     EmailRef,
     EmailsDraft,
     KbScopeName,
+    MailItem,
     MailQuery,
     PolicyDecision,
     PolicyDraft,
@@ -194,24 +196,32 @@ def decide_pending(
     return f"cartão #{card}: {word} {len(rows)} sugestão(ões); {WAITING}", None
 
 
-def _batch_ids(ctx: ProposeActionCtx, email_ids: list[str] | None,
-               gmail_query: str | None) -> list[str]:
+def _batch_ids(
+    ctx: ProposeActionCtx, email_ids: list[str] | None, gmail_query: str | None
+) -> tuple[list[tuple[str, MailItem | None]], int | None]:
+    """The batch (id, and the item when a search already fetched it) and, for a
+    search, Gmail's estimate of its size."""
     if (email_ids is None) == (gmail_query is None):
         raise ValueError("informe email_ids ou gmail_query (só um dos dois)")
     if email_ids is not None:
-        return list(dict.fromkeys(email_ids))[:BATCH_MAX]
-    ids: list[str] = []
+        return [(i, None) for i in list(dict.fromkeys(email_ids))[:BATCH_MAX]], None
+    items: dict[str, MailItem] = {}
+    estimate: int | None = None
     token: str | None = None
-    while len(ids) < BATCH_MAX:
+    while len(items) < BATCH_MAX:
         page = ctx.mail.list_messages(MailQuery(
-            query=gmail_query, max_results=BATCH_MAX - len(ids), page_token=token,
+            query=gmail_query, max_results=BATCH_MAX - len(items), page_token=token,
             include_spam_trash=True,
         ))
-        ids += [i.id for i in page.items if i.id not in ids]
+        if estimate is None:
+            estimate = page.result_size_estimate
+        for item in page.items:
+            items.setdefault(item.id, item)
         token = page.next_page_token
         if token is None or not page.items:
             break
-    return ids[:BATCH_MAX]
+    found: list[tuple[str, MailItem | None]] = list(items.items())
+    return found[:BATCH_MAX], estimate
 
 
 @tool(response_format="content_and_artifact", parse_docstring=True)
@@ -236,8 +246,9 @@ def propose_email_actions(
     action_ids: list[int] = []
     counts: Counter[str] = Counter()
     seen: list[EmailRef] = []
-    for email_id in _batch_ids(ctx, email_ids, gmail_query):
-        row = ctx.lookup.ensure(email_id)
+    entries, estimate = _batch_ids(ctx, email_ids, gmail_query)
+    for email_id, item in entries:
+        row = ctx.lookup.remember(item) if item is not None else ctx.lookup.ensure(email_id)
         if row is None:
             counts["gone"] += 1
             continue
@@ -256,9 +267,20 @@ def propose_email_actions(
     remember(ctx.refs, ctx.chat.message_id, seen)
     if not action_ids:
         raise ValueError("nenhuma sugestão criada; " + "; ".join(notes or ["nenhum e-mail"]))
-    card = _card(ctx, ActionsDraft(action_ids=tuple(action_ids)))
+    batch = ""
+    draft = ActionsDraft(action_ids=tuple(action_ids), action=kind)
+    if gmail_query is not None:
+        total = max(estimate or 0, len(action_ids))
+        number = ctx.cards.batch_count(ctx.chat.message_id, gmail_query, kind) + 1
+        batches = max(number, ceil(total / BATCH_MAX))
+        draft = draft.model_copy(update={
+            "batch_query": gmail_query, "batch_total": total, "batch_no": number,
+        })
+        batch = (f" — lote {number} de {batches} ({len(action_ids)} de ~{total} e-mails"
+                 f" da busca '{gmail_query}')")
+    card = _card(ctx, draft)
     return "; ".join(
-        [f"cartão #{card}: {kind} em {len(action_ids)} e-mail(s)", *notes, WAITING]
+        [f"cartão #{card}: {kind} em {len(action_ids)} e-mail(s){batch}", *notes, WAITING]
     ), None
 
 

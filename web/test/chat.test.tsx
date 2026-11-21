@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { ChatMessage, Turn } from '../src/api/schemas'
-import { actionsCard, conversation, message, ruleCard, turn } from './chatFixtures'
+import { actionsCard, card, conversation, message, ruleCard, turn } from './chatFixtures'
 import { rule } from './fixtures'
 import { json, renderApp, signedIn } from './render'
 import { server } from './server'
@@ -226,4 +226,18 @@ test('automatic_mode_does_not_toast_failed_calls', async () => {
   renderApp('/chat')
   expect(await screen.findByText('Pronto.')).toBeInTheDocument()
   expect(screen.queryByText(/gemini-3\.8-flash: não respondeu a tempo/)).toBeNull()
+})
+
+
+test('actions_card_shows_its_batch', async () => {
+  const batch = card({
+    id: 16, kind: 'actions', verdict: null, batch_query: 'in:spam', batch_total: 201, batch_no: 1,
+    items: Array.from({ length: 3 }, (_, i) => ({
+      email_id: null, action_id: 30 + i, attachment_id: null, title: `Alerta ${i}`,
+      subtitle: 'trash · googlealerts-noreply@google.com', status: 'pending',
+    })),
+  })
+  chatWith([message({}), message({ id: 2, role: 'assistant', text: 'São ~201; lote 1 de 5.', cards: [batch] })])
+  renderApp('/chat')
+  expect(await screen.findByText('Lote 1 de 5 · 3 de ~201 e-mails')).toBeInTheDocument()
 })
