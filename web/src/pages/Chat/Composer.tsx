@@ -16,9 +16,12 @@ interface Props {
   onSend: (text: string) => Promise<boolean>
   onAudio: (wav: Blob) => Promise<boolean>
   onError: (message: string) => void
+  models: string[]
+  model: string | null
+  onModel: (model: string | null) => void
 }
 
-export function Composer({ text, onText, busy, onSend, onAudio, onError }: Props) {
+export function Composer({ text, onText, busy, onSend, onAudio, onError, models, model, onModel }: Props) {
   const [recording, setRecording] = useState<Recording | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [sending, setSending] = useState(false)
@@ -118,6 +121,20 @@ export function Composer({ text, onText, busy, onSend, onAudio, onError }: Props
               className="chat-composer__input"
             />
           </label>
+          <select
+            aria-label="Modelo"
+            title="Modelo do chat: automático tenta do melhor ao mais leve"
+            className="chat-composer__model t-small"
+            value={model ?? ''}
+            onChange={(e) => onModel(e.target.value || null)}
+          >
+            <option value="">Automático</option>
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             className="ia-btn ia-btn--ghost ia-btn--icon chat-round"

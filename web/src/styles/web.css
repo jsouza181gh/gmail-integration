@@ -83,11 +83,14 @@ button.ia-bottomnav__item { border: 0; background: none; cursor: pointer; }
 .chat-composer__rec { flex: 1 1 0; display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; color: var(--ink-muted); }
 .chat-rec-dot { width: 10px; height: 10px; border-radius: 9999px; background: var(--danger); }
 .chat-round { border-radius: 9999px; }
+.chat-composer__model { flex: 0 0 auto; max-width: 11rem; height: 32px; padding: 0 10px; border-radius: 9999px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-muted); font-family: var(--font-sans); text-overflow: ellipsis; cursor: pointer; }
+.chat-composer__model:focus-visible { outline: 2px solid var(--accent, #10a37f); outline-offset: 2px; }
 @media (max-width: 639px) {
   .chat-head { padding: 16px 16px 0; }
   .chat-main { padding: 16px; }
   .chat-foot { padding: 8px 16px 16px; bottom: var(--nav-bottom-height); }
   .chat-user { max-width: 90%; }
+  .chat-composer__model { max-width: 6.5rem; padding: 0 6px; }
 }
 
 /* Caixa: list + detail on wide screens; one pane at a time below 900px */

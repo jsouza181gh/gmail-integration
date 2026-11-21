@@ -629,6 +629,8 @@ class ChatMessage(Base):
     error: Mapped[str | None] = mapped_column(Text)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id"))
     reply_to: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"))
+    # user messages: the model the user pinned for this turn (None = the chain)
+    model: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

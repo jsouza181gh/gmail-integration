@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
+import * as api from '../../api/endpoints'
 import { ApiError } from '../../api/errors'
+import type { ChatMessage } from '../../api/schemas'
 import { usePendingCount } from '../../api/hooks'
 import { formatWhen } from '../../lib/format'
 import { Empty } from '../../ui/Empty'
@@ -15,9 +18,60 @@ function why(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.detail : fallback
 }
 
+const MODEL_KEY = 'chat.model'
+
+function readModel(): string | null {
+  try {
+    return localStorage.getItem(MODEL_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeModel(model: string | null) {
+  try {
+    if (model) localStorage.setItem(MODEL_KEY, model)
+    else localStorage.removeItem(MODEL_KEY)
+  } catch {
+    // storage may be unavailable
+  }
+}
+
+const LIVE = new Set(['queued', 'running'])
+
+/** Toasts each model call that failed while an answer was in flight, and the
+ * answer's own failure; history loaded with the page stays quiet. */
+function useFailureToasts(messages: ChatMessage[], show: (text: string) => void) {
+  const watched = useRef(new Map<number, number>())
+  useEffect(() => {
+    for (const m of messages) {
+      if (m.role !== 'assistant') continue
+      const seen = watched.current.get(m.id)
+      if (seen === undefined) {
+        if (LIVE.has(m.status)) watched.current.set(m.id, m.failures.length)
+        continue
+      }
+      for (const f of m.failures.slice(seen)) show(`${f.model}: ${f.reason}`)
+      watched.current.set(m.id, m.failures.length)
+      if (!LIVE.has(m.status)) {
+        watched.current.delete(m.id)
+        if (m.status === 'failed' && m.error) show(m.error)
+      }
+    }
+  }, [messages, show])
+}
+
 export default function Chat() {
   const chat = useChat()
   const toast = useToast()
+  const models = useQuery({ queryKey: ['chat', 'models'], queryFn: () => api.chatModels() })
+  const [model, setModel] = useState<string | null>(readModel)
+  const chosen = model && models.data?.models.includes(model) ? model : null
+  const pickModel = (m: string | null) => {
+    writeModel(m)
+    setModel(m)
+  }
+  useFailureToasts(chat.messages, toast.show)
   const pending = usePendingCount()
   const [params, setParams] = useSearchParams()
   // 'Discutir no chat' (Aprovações) arrives as ?draft=...
@@ -99,9 +153,12 @@ export default function Chat() {
           text={text}
           onText={setText}
           busy={chat.busy}
-          onSend={(t) => attempt(() => chat.send(t), 'Não foi possível enviar.')}
-          onAudio={(wav) => attempt(() => chat.sendAudio(wav), 'Não foi possível enviar o áudio.')}
+          onSend={(t) => attempt(() => chat.send(t, chosen), 'Não foi possível enviar.')}
+          onAudio={(wav) => attempt(() => chat.sendAudio(wav, chosen), 'Não foi possível enviar o áudio.')}
           onError={(m) => toast.show(m)}
+          models={models.data?.models ?? []}
+          model={chosen}
+          onModel={pickModel}
         />
         <p className="t-small ia-subtle chat-foot__note">
           Mudanças de regra e de configuração sempre pedem confirmação.

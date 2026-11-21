@@ -242,3 +242,18 @@ def test_chat_turn_quota_reason() -> None:
     assert _reason(LLMExhaustedError("x", kinds=("quota",))) == (
         "A cota de hoje acabou em todos os modelos do chat; volta às 05h."
     )
+
+
+def test_chosen_model_pins_the_chat_prompt(session_factory: sessionmaker[Session]) -> None:
+    w = World(session_factory, [turn("Ok.")])
+    t = w.store.start_turn(w.conv, text="oi", model="gemini-3.6-flash")
+    w.handle(t.assistant.id)
+    assert w.caller.prompts[0].models == ("gemini-3.6-flash",)
+
+
+def test_event_turn_keeps_the_chosen_model(session_factory: sessionmaker[Session]) -> None:
+    w = World(session_factory, [turn("Ok."), turn("Feito.")])
+    first = w.store.start_turn(w.conv, text="oi", model="gemini-3.6-flash")
+    w.handle(first.assistant.id)
+    event = w.store.start_event_turn(w.conv, "[evento] x")
+    assert event is not None and event.user.model == "gemini-3.6-flash"

@@ -87,6 +87,8 @@ class Prompt(Schema):
     context: CallContext = CallContext()
     # cap on attempts for this call (interactive callers fail fast); None = gateway default
     attempts: int | None = None
+    # only these models (the user pinned one in the chat); None = the gateway's chain
+    models: tuple[str, ...] | None = None
 
 
 class TokenUsage(Schema):

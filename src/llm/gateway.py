@@ -401,7 +401,7 @@ class LLMGateway:
 
         `call` gets the attempt's model name; `prompt` is what gets recorded.
         """
-        chain = tuple(models or self.models)
+        chain = tuple(models or prompt.models or self.models)
         last_exc: BaseException | None = None
         kinds: list[ErrorKind] = []
         budget = min(prompt.attempts or self.max_attempts, self.max_attempts)

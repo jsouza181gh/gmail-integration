@@ -101,17 +101,17 @@ export function useChat() {
   }, [current, qc])
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, model: string | null = null) => {
       const id = await ensureConversation()
-      merge(id, await api.sendText(id, text))
+      merge(id, await api.sendText(id, text, model))
     },
     [ensureConversation, merge],
   )
 
   const sendAudio = useCallback(
-    async (wav: Blob) => {
+    async (wav: Blob, model: string | null = null) => {
       const id = await ensureConversation()
-      merge(id, await api.sendAudio(id, wav))
+      merge(id, await api.sendAudio(id, wav, model))
     },
     [ensureConversation, merge],
   )

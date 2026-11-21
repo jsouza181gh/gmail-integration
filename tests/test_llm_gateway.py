@@ -695,3 +695,11 @@ def test_free_mode_paces_per_model() -> None:
     chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE")]), "B": FakeChat([Out(x=1)])}
     gw(mode="free", rpm=15, clock=clock, models=["A", "B"], chats=chats).generate_structured(P, Out)
     assert clock.slept == []  # B has its own per-minute quota: no wait after A
+
+
+def test_prompt_models_restrict_the_chain() -> None:
+    chats = {"A": FakeChat([]), "B": FakeChat([RuntimeError("503 UNAVAILABLE")] * 2)}
+    prompt = P.model_copy(update={"models": ("B",), "attempts": 2})
+    with pytest.raises(LLMExhaustedError):
+        gw(models=["A", "B"], chats=chats).generate_structured(prompt, Out)
+    assert chats["A"].runnable.script == []  # untouched: never called

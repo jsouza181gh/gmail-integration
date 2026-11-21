@@ -218,7 +218,7 @@ class HistoryTurn(Schema):
     text: str
 
 
-def build_transcribe_prompt(mime_type: str, data: bytes) -> Prompt:
+def build_transcribe_prompt(mime_type: str, data: bytes, model: str | None = None) -> Prompt:
     return Prompt(
         purpose="transcribe",
         messages=(
@@ -227,6 +227,7 @@ def build_transcribe_prompt(mime_type: str, data: bytes) -> Prompt:
                         parts=(BinaryPart(mime_type=mime_type, data=data),)),
         ),
         attempts=CHAT_ATTEMPTS,
+        models=(model,) if model else None,
     )
 
 
@@ -237,6 +238,7 @@ def build_chat_prompt(
     text: str,
     today: date,
     pending: int,
+    model: str | None = None,
 ) -> Prompt:
     system = [
         config.chat_prompt.rstrip(),
@@ -251,4 +253,5 @@ def build_chat_prompt(
         ChatMessage(role="human" if h.role == "user" else "ai", content=h.text) for h in history
     ]
     messages.append(ChatMessage(role="human", content=text))
-    return Prompt(purpose="chat", messages=tuple(messages), attempts=CHAT_ATTEMPTS)
+    return Prompt(purpose="chat", messages=tuple(messages), attempts=CHAT_ATTEMPTS,
+                  models=(model,) if model else None)

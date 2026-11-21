@@ -109,6 +109,8 @@ export function message(over: Partial<ChatMessage>): ChatMessage {
     run_id: null,
     created_at: '2026-11-19T12:00:00Z',
     cards: [],
+    model: null,
+    failures: [],
     ...over,
   }
 }

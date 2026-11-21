@@ -26,6 +26,7 @@ from src.agent.types import (
 )
 from src.chat.audio import WavInfo
 from src.db.models import (
+    LlmCall,
     ChatMessageRef,
     Attachment,
     AutomationRule,
@@ -137,6 +138,30 @@ class CardView(Schema):
     items: tuple[CardItemView, ...]
 
 
+class CallFailure(Schema):
+    """One failed model call of an answer (the panel toasts them)."""
+
+    model: str
+    reason: str
+
+
+def failure_reason(kind: str | None, error: str | None) -> str:
+    text = error or ""
+    if "Timeout" in text or "timed out" in text:
+        return "não respondeu a tempo"
+    if "503" in text or "UNAVAILABLE" in text:
+        return "sobrecarregado (503)"
+    if "504" in text or "DEADLINE" in text:
+        return "não respondeu a tempo"
+    if kind == "rate" or "429" in text:
+        return "limite de uso (429)"
+    if kind == "bad_output":
+        return "resposta inválida"
+    if kind == "transient":
+        return "falha de conexão"
+    return "erro"
+
+
 class MessageView(Schema):
     id: int
     conversation_id: int
@@ -150,6 +175,8 @@ class MessageView(Schema):
     run_id: int | None
     created_at: datetime
     cards: tuple[CardView, ...]
+    model: str | None = None
+    failures: tuple[CallFailure, ...] = ()
 
 
 class TurnView(Schema):
@@ -217,6 +244,7 @@ class ChatStore:
         *,
         text: str | None = None,
         audio: tuple[bytes, WavInfo] | None = None,
+        model: str | None = None,
     ) -> TurnView:
         """The user's message plus a queued assistant placeholder."""
         clean = (text or "").strip()[:TEXT_MAX]
@@ -235,6 +263,7 @@ class ChatStore:
                 text="" if audio else clean,
                 input="audio" if audio else "text",
                 status="queued" if audio else "done",
+                model=model,
                 created_at=now,
                 updated_at=now,
             )
@@ -260,9 +289,15 @@ class ChatStore:
                 raise LookupError("conversa não encontrada")
             if self._busy(s, conversation_id):
                 return None
+            pinned = s.scalar(  # the continuation keeps the model the user chose
+                select(ChatMessage.model)
+                .where(ChatMessage.conversation_id == conversation_id,
+                       ChatMessage.role == "user", ChatMessage.input != "event")
+                .order_by(ChatMessage.id.desc()).limit(1)
+            )
             event = ChatMessage(conversation_id=conversation_id, role="user",
                                 text=text[:TEXT_MAX], input="event", status="done",
-                                created_at=now, updated_at=now)
+                                model=pinned, created_at=now, updated_at=now)
             s.add(event)
             s.flush()
             assistant_id = self._placeholder(s, conversation_id, event.id, now)
@@ -596,12 +631,23 @@ class ChatStore:
                 .where(ChatAudio.message_id.in_([m.id for m in rows]))
             )
         }
+        runs = [m.run_id for m in rows if m.role == "assistant" and m.run_id is not None]
+        failures: dict[int, list[CallFailure]] = {}
+        for c in s.scalars(
+            select(LlmCall).where(LlmCall.agent_run_id.in_(runs), LlmCall.status == "error")
+            .order_by(LlmCall.id)
+        ):
+            if c.agent_run_id is not None:
+                failures.setdefault(c.agent_run_id, []).append(
+                    CallFailure(model=c.model, reason=failure_reason(c.error_kind, c.error))
+                )
         return [
             MessageView(
                 id=m.id, conversation_id=m.conversation_id, role=m.role, text=m.text,
                 input=m.input, status=m.status, progress=m.progress, error=m.error,
                 audio_ms=audio.get(m.id), run_id=m.run_id, created_at=m.created_at,
-                cards=tuple(cards.get(m.id, ())),
+                cards=tuple(cards.get(m.id, ())), model=m.model,
+                failures=tuple(failures.get(m.run_id, ())) if m.run_id is not None else (),
             )
             for m in rows
         ]
