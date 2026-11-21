@@ -19,6 +19,21 @@ DEFAULT_CHAT_MODELS = (
 CHAT_TIMEOUT_S = 15
 
 
+class ApiKeys(Schema):
+    """app: chat, triage and new mail; backfill: the history backfill.
+    `separate` = a distinct backfill key was set (otherwise both are the app's)."""
+
+    app: str
+    backfill: str
+    separate: bool
+
+
+def load_keys() -> ApiKeys:
+    app = os.getenv("GOOGLE_API_KEY", "").strip()
+    backfill = os.getenv("GOOGLE_API_KEY_BACKFILL", "").strip()
+    return ApiKeys(app=app, backfill=backfill or app, separate=bool(backfill) and backfill != app)
+
+
 class LLMConfig(Schema):
     models: tuple[str, ...]
     mode: Literal["free", "fast"]
@@ -47,7 +62,9 @@ def load_llm_config() -> LLMConfig:
 def build_gateway(
     recorder: CallRecorder | None = None,
     mode_source: Callable[[], Literal["free", "fast"]] | None = None,
+    key: str | None = None,
 ) -> LLMGateway:
+    """The app's gateway (triage, new mail, chat search) on the app key."""
     cfg = load_llm_config()
     return LLMGateway(
         cfg.models,
@@ -57,7 +74,17 @@ def build_gateway(
         embed_model=cfg.embed_model,
         mode_source=mode_source,
         recorder=recorder,
+        api_key=key or load_keys().app or None,
     )
+
+
+def build_backfill_gateway(
+    recorder: CallRecorder | None = None,
+    mode_source: Callable[[], Literal["free", "fast"]] | None = None,
+) -> LLMGateway:
+    """The history backfill's gateway, on GOOGLE_API_KEY_BACKFILL (the app key
+    when unset): its quota never competes with the app's."""
+    return build_gateway(recorder, mode_source, key=load_keys().backfill or None)
 
 
 def load_chat_config() -> LLMConfig:
@@ -70,6 +97,7 @@ def load_chat_config() -> LLMConfig:
 def build_chat_gateway(
     recorder: CallRecorder | None = None,
     mode_source: Callable[[], Literal["free", "fast"]] | None = None,
+    key: str | None = None,
 ) -> LLMGateway:
     """The chat's own gateway: its own pacing and quota memory, so a busy
     triage never delays an answer and vice versa."""
@@ -82,5 +110,5 @@ def build_chat_gateway(
         embed_model=cfg.embed_model,
         mode_source=mode_source,
         recorder=recorder,
-        chat_factory=chat_client_factory(CHAT_TIMEOUT_S),
+        chat_factory=chat_client_factory(CHAT_TIMEOUT_S, key or load_keys().app or None),
     )

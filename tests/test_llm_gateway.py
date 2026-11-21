@@ -703,3 +703,27 @@ def test_prompt_models_restrict_the_chain() -> None:
     with pytest.raises(LLMExhaustedError):
         gw(models=["A", "B"], chats=chats).generate_structured(prompt, Out)
     assert chats["A"].runnable.script == []  # untouched: never called
+
+
+def test_load_keys_falls_back_to_the_app_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.llm.config import load_keys
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "app-key")
+    monkeypatch.delenv("GOOGLE_API_KEY_BACKFILL", raising=False)
+    keys = load_keys()
+    assert (keys.app, keys.backfill, keys.separate) == ("app-key", "app-key", False)
+    monkeypatch.setenv("GOOGLE_API_KEY_BACKFILL", "bf-key")
+    keys = load_keys()
+    assert (keys.app, keys.backfill, keys.separate) == ("app-key", "bf-key", True)
+
+
+def test_backfill_gateway_uses_the_backfill_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.llm.config import build_backfill_gateway, build_chat_gateway
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "app-key")
+    monkeypatch.setenv("GOOGLE_API_KEY_BACKFILL", "bf-key")
+    bf = build_backfill_gateway()
+    chat = build_chat_gateway()
+    assert bf._chat_factory("gemini-3.5-flash-lite").google_api_key.get_secret_value() == "bf-key"  # type: ignore[attr-defined]
+    assert chat._chat_factory("gemini-3.6-flash").google_api_key.get_secret_value() == "app-key"  # type: ignore[attr-defined]
+    assert bf._embedder._api_key == "bf-key"  # type: ignore[attr-defined]

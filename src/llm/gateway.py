@@ -201,14 +201,21 @@ def _signatures(out: AIMessage) -> dict[str, str]:
     return sigs
 
 
-def chat_client_factory(timeout_s: float) -> Callable[[str], ChatModelLike]:
+def chat_client_factory(
+    timeout_s: float, api_key: str | None = None
+) -> Callable[[str], ChatModelLike]:
+    """`api_key` None = GOOGLE_API_KEY from the environment."""
+
     def build(model: str) -> ChatModelLike:
+        if api_key:
+            return ChatGoogleGenerativeAI(
+                model=model, max_retries=0, timeout=timeout_s, google_api_key=api_key
+            )
         return ChatGoogleGenerativeAI(model=model, max_retries=0, timeout=timeout_s)
 
     return build
 
 
-_default_chat = chat_client_factory(90)
 
 
 class GenAIEmbedder:
@@ -218,14 +225,15 @@ class GenAIEmbedder:
     gemini-embedding-2 into a single vector.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
+        self._api_key = api_key  # None = GOOGLE_API_KEY from the environment
         self._client: genai.Client | None = None
 
     def embed(
         self, model: str, inputs: Sequence[EmbedInput], task: EmbedTask, dim: int
     ) -> tuple[tuple[float, ...], ...]:
         if self._client is None:
-            self._client = genai.Client()
+            self._client = genai.Client(api_key=self._api_key) if self._api_key else genai.Client()
         contents: list[genai_types.Content] = []
         for item in inputs:
             parts = [genai_types.Part.from_text(text=item.text)]
@@ -260,6 +268,7 @@ class LLMGateway:
         embed_model: str = DEFAULT_EMBED_MODEL,
         embedder: EmbedderLike | None = None,
         mode_source: Callable[[], Literal["free", "fast"]] | None = None,
+        api_key: str | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -271,10 +280,10 @@ class LLMGateway:
         self.min_interval_s = 60 / rpm
         self.max_attempts = max_attempts
         self.recorder = recorder
-        self._chat_factory = chat_factory or _default_chat
+        self._chat_factory = chat_factory or chat_client_factory(90, api_key)
         self.embed_model = embed_model
         self.mode_source = mode_source  # runtime override (app_settings.llm_mode)
-        self._embedder = embedder or GenAIEmbedder()
+        self._embedder = embedder or GenAIEmbedder(api_key)
         # LangChain clients are not shared across threads (worker lanes).
         self._local = threading.local()
         self._sleep = sleep
