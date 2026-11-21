@@ -359,3 +359,10 @@ def test_small_search_is_a_single_batch(w: ChatWorld) -> None:
     res = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
                                           "gmail_query": "in:spam"})
     assert res.ok and "lote 1 de 1 (2 de ~2 e-mails" in res.message.content
+
+
+def test_chat_prompt_v3_announces_batches_and_reports_results() -> None:
+    from src.agent.prompts import CHAT_PROMPT_V3
+
+    assert "lotes de 50" in CHAT_PROMPT_V3 and "concluído" in CHAT_PROMPT_V3
+    assert "propose_email_actions" in CHAT_PROMPT_V3
