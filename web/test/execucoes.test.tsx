@@ -191,3 +191,37 @@ test('finished_backfill_has_no_pause_button', async () => {
   expect(await within(card).findByText('Concluído')).toBeInTheDocument()
   expect(within(card).queryByRole('button', { name: 'Pausar' })).not.toBeInTheDocument()
 })
+
+
+test('turbo_toggle_on_the_progress_card', async () => {
+  let state = backfillStatus
+  const sent: unknown[] = []
+  load()
+  server.use(
+    http.get('/api/backfill', () => json(state)),
+    http.post('/api/backfill/turbo', async ({ request }) => {
+      const body = (await request.json()) as { on: boolean }
+      sent.push(body)
+      state = { ...backfillStatus, turbo: body.on }
+      return json(state)
+    }),
+  )
+  const user = userEvent.setup()
+  renderApp('/execucoes')
+  const card = await screen.findByRole('region', { name: 'Progresso do backfill' })
+  await user.click(await within(card).findByRole('button', { name: 'Ligar turbo' }))
+  expect(await within(card).findByRole('button', { name: 'Desligar turbo' })).toBeInTheDocument()
+  await user.click(within(card).getByRole('button', { name: 'Desligar turbo' }))
+  expect(await within(card).findByRole('button', { name: 'Ligar turbo' })).toBeInTheDocument()
+  expect(sent).toEqual([{ on: true }, { on: false }])
+})
+
+test('turbo_disabled_without_a_second_key', async () => {
+  load()
+  server.use(http.get('/api/backfill', () => json({ ...backfillStatus, turbo_available: false })))
+  renderApp('/execucoes')
+  const card = await screen.findByRole('region', { name: 'Progresso do backfill' })
+  const btn = await within(card).findByRole('button', { name: 'Ligar turbo' })
+  expect(btn).toBeDisabled()
+  expect(btn).toHaveAttribute('title', expect.stringMatching(/GOOGLE_API_KEY_BACKFILL/))
+})

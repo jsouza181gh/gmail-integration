@@ -85,5 +85,7 @@ function backfillPaused() {
     mailbox_total: 100, percent: 10, pages_last_hour: 0, pages_last_day: 5, eta_hours: null,
     deferred_until: '2999-01-01T00:00:00Z',
     paused: false,
+    turbo: false,
+    turbo_available: false,
   }
 }

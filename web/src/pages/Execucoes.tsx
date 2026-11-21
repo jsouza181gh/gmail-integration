@@ -80,6 +80,14 @@ export default function Execucoes() {
     },
     onError: (err) => toast.show(failure(err, 'Não foi possível mudar o histórico.')),
   })
+  const turbo = useMutation({
+    mutationFn: (on: boolean) => api.backfillTurbo(on),
+    onSuccess: (status, on) => {
+      qc.setQueryData(['backfill'], status)
+      toast.show(on ? 'Turbo ligado: o histórico também usa a chave do app quando ela estiver livre.' : 'Turbo desligado.')
+    },
+    onError: (err) => toast.show(failure(err, 'Não foi possível mudar o turbo.')),
+  })
   const requeue = useMutation({
     mutationFn: api.requeueJob,
     onSuccess: async () => {
@@ -104,6 +112,8 @@ export default function Execucoes() {
           resuming={start.isPending}
           onToggle={(pause) => toggle.mutate(pause)}
           toggling={toggle.isPending}
+          onTurbo={(on) => turbo.mutate(on)}
+          turboing={turbo.isPending}
         /> : null}
       {backfill.isError ? <Empty text="Não foi possível carregar o progresso do histórico." /> : null}
 
@@ -258,12 +268,16 @@ function BackfillCard({
   resuming,
   onToggle,
   toggling,
+  onTurbo,
+  turboing,
 }: {
   status: NonNullable<ReturnType<typeof useBackfill>['data']>
   onResume: () => void
   resuming: boolean
   onToggle: (pause: boolean) => void
   toggling: boolean
+  onTurbo: (on: boolean) => void
+  turboing: boolean
 }) {
   const p = s.progress
   const paused = s.paused || s.deferred_until !== null
@@ -306,6 +320,23 @@ function BackfillCard({
           >
             <Icon name={s.paused ? 'refresh' : 'pause'} />
             {s.paused ? 'Retomar' : 'Pausar'}
+          </button>
+        )}
+        {p.fetch_done ? null : (
+          <button
+            type="button"
+            className={s.turbo ? 'ia-btn ia-btn--sm ia-btn--primary' : 'ia-btn ia-btn--sm'}
+            aria-pressed={s.turbo}
+            disabled={turboing || !s.turbo_available}
+            title={
+              s.turbo_available
+                ? 'Usa também a chave do app, só enquanto o app não precisa dela'
+                : 'Precisa de uma segunda chave (GOOGLE_API_KEY_BACKFILL) no .env da VPS'
+            }
+            onClick={() => onTurbo(!s.turbo)}
+          >
+            <Icon name="zap" />
+            {s.turbo ? 'Desligar turbo' : 'Ligar turbo'}
           </button>
         )}
         </span>

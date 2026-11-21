@@ -162,6 +162,8 @@ export const BackfillStatus = z.object({
   eta_hours: z.number().nullable(),
   deferred_until: strN,
   paused: z.boolean(),
+  turbo: z.boolean(),
+  turbo_available: z.boolean(),
 })
 export type BackfillStatus = z.infer<typeof BackfillStatus>
 
