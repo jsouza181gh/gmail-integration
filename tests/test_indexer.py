@@ -157,3 +157,11 @@ def test_candidate_rules(mime: str, name: str, size: int, inline: bool, reason: 
 
     ref = AttachmentRef(part_id="1", filename=name, mime_type=mime, size=size, inline=inline)
     assert candidate(ref) == reason
+
+
+def test_backfill_enqueues_backfill_attachments(session_factory: sessionmaker[Session]) -> None:
+    idx, _ = make(session_factory, service(mail()), FakeEmbedder())
+    idx.index(["a", "b", "c"], run_id=7)
+    with session_factory() as s:
+        kinds = sorted(s.scalars(select(Job.kind)))
+    assert kinds == ["backfill_attachment", "backfill_attachment"]

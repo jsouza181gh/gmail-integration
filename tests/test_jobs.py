@@ -326,3 +326,13 @@ def test_non_housekeeping_lane_skips_requeue(jobs: JobStore) -> None:
     lane.run_forever(stop=lambda: next(loops))
     assert len(seen.seen) == 1
     assert jobs.counts().running == 1  # the main lane's job was left alone
+
+
+def test_backfill_attachment_roundtrip_and_key(jobs: JobStore) -> None:
+    from src.jobs.types import BackfillAttachmentJob, IndexAttachmentJob
+
+    assert jobs.enqueue(BackfillAttachmentJob(attachment_id=3))
+    assert not jobs.enqueue(BackfillAttachmentJob(attachment_id=3))
+    assert jobs.enqueue(IndexAttachmentJob(attachment_id=3))  # other kind, other key
+    first = jobs.claim("w1", kinds=frozenset({"backfill_attachment"}))
+    assert first is not None and first.payload == BackfillAttachmentJob(attachment_id=3)

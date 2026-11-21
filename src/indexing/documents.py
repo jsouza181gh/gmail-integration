@@ -15,7 +15,7 @@ from src.gmail.full import fetch_attachment
 from src.indexing.extract import Extracted, extract
 from src.indexing.indexer import defer_on_quota, mime_for
 from src.indexing.store import AnalysisRecord, IndexStore
-from src.jobs.types import ClaimedJob, IndexAttachmentJob
+from src.jobs.types import BackfillAttachmentJob, ClaimedJob, IndexAttachmentJob
 from src.llm.errors import LLMExhaustedError, LLMFatalError
 from src.llm.types import (
     CallContext,
@@ -176,8 +176,8 @@ class DocumentIndexer:
 
     def handle(self, job: ClaimedJob) -> None:
         payload = job.payload
-        if not isinstance(payload, IndexAttachmentJob):
-            raise TypeError(f"job {job.id} não é index_attachment")
+        if not isinstance(payload, IndexAttachmentJob | BackfillAttachmentJob):
+            raise TypeError(f"job {job.id} não é index_attachment/backfill_attachment")
         row = self.store.attachment(payload.attachment_id)
         if row is None or row.status != "pending":
             return

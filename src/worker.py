@@ -68,6 +68,7 @@ def main() -> None:
         "execute_action": agent.execute_action.handle,
         "index_email": indexing.indexer.handle,
         "index_attachment": indexing.documents.handle,
+        "backfill_attachment": indexing.documents.handle,
         "backfill_page": indexing.backfill.handle,
     }
 
