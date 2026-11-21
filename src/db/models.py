@@ -635,6 +635,9 @@ class ChatMessage(Base):
     reply_to: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"))
     # user messages: the model the user pinned for this turn (None = the chain)
     model: Mapped[str | None] = mapped_column(String(64))
+    # a continuation answer waiting for this card's approved actions to run
+    # (no FK: chat_cards already points here)
+    wait_card_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -714,6 +717,10 @@ class ChatCard(Base):
     comment: Mapped[str | None] = mapped_column(Text)
     created_rule_id: Mapped[int | None] = mapped_column(ForeignKey("automation_rules.id"))
     kb_entry_id: Mapped[int | None] = mapped_column(ForeignKey("kb_entries.id"))
+    # actions cards proposed from a Gmail search: which batch of how many
+    batch_query: Mapped[str | None] = mapped_column(Text)
+    batch_total: Mapped[int | None] = mapped_column(Integer)
+    batch_no: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

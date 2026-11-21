@@ -202,6 +202,9 @@ class NoCards:
     def add_card(self, message_id: int, channel: ChatChannel, draft: CardDraft) -> int:
         raise AssertionError("cards not expected")
 
+    def batch_count(self, message_id: int, query: str, action: str) -> int:
+        raise AssertionError("cards not expected")
+
 
 class NoRefs:
     def add_refs(self, message_id: int, refs: Sequence[EmailRef]) -> None:

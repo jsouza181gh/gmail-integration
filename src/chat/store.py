@@ -8,7 +8,7 @@ method is its own transaction.
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.agent.prompts import HistoryTurn
@@ -136,6 +136,9 @@ class CardView(Schema):
     created_rule_id: int | None
     kb_entry_id: int | None
     items: tuple[CardItemView, ...]
+    batch_query: str | None = None
+    batch_total: int | None = None
+    batch_no: int | None = None
 
 
 class CallFailure(Schema):
@@ -461,6 +464,17 @@ class ChatStore:
 
     # --- cards ------------------------------------------------------------------
 
+    def batch_count(self, message_id: int, query: str, action: str) -> int:
+        """Actions cards of this conversation already proposed for `query`."""
+        with self.sf() as s:
+            conv = s.scalar(select(ChatMessage.conversation_id).where(ChatMessage.id == message_id))
+            return s.scalar(
+                select(func.count()).select_from(ChatCard)
+                .join(ChatMessage, ChatMessage.id == ChatCard.message_id)
+                .where(ChatMessage.conversation_id == conv, ChatCard.kind == "actions",
+                       ChatCard.batch_query == query, ChatCard.action == action)
+            ) or 0
+
     def add_card(self, message_id: int, channel: ChatChannel, draft: CardDraft) -> int:
         now = self._now()
         card = ChatCard(
@@ -491,6 +505,9 @@ class ChatStore:
                 card.policy_value = draft.policy
             case ActionsDraft():
                 card.verdict, card.comment = draft.verdict, draft.comment
+                card.action = draft.action
+                card.batch_query = draft.batch_query
+                card.batch_total, card.batch_no = draft.batch_total, draft.batch_no
                 items = [(None, a, None) for a in draft.action_ids]
             case EmailsDraft():
                 items = [(e, None, None) for e in draft.email_ids]
@@ -589,6 +606,7 @@ class ChatStore:
                 created_rule_id=c.created_rule_id,
                 kb_entry_id=c.kb_entry_id,
                 items=tuple(by_card.get(c.id, ())),
+                batch_query=c.batch_query, batch_total=c.batch_total, batch_no=c.batch_no,
             ))
         return views
 
