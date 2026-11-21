@@ -21,6 +21,7 @@ from src.agent.rules import RuleAdmin, RuleEngine
 from src.agent.sender_history import DbSenderHistory
 from src.agent.tools import build_registry
 from src.agent.trail import Trail
+from src.chat.continuation import CardWaiter
 from src.chat.retrieval import DbDocCatalog, DbEmailLookup, DbRetriever
 from src.chat.store import ChatStore
 from src.db.store import Store
@@ -93,8 +94,10 @@ class Agent:
         def chat_context(run: RunScope, chat: ChatScope) -> AgentContext:
             return build_context(run, None, chat)
 
+        self.card_waiter = CardWaiter(self.chat_store, jobs)
         self.execute_action = ExecuteActionFlow(
-            self.approvals, store, GmailActions(get_gmail_service, has_scope)
+            self.approvals, store, GmailActions(get_gmail_service, has_scope),
+            on_settled=self.card_waiter.on_action_settled,
         )
         self.process_email = ProcessEmailFlow(
             store=store,

@@ -163,3 +163,16 @@ def test_kb_text_never_carries_third_party_text(sf: sessionmaker[Session]) -> No
         kb = s.scalars(select(KbEntry)).one()
     assert "IGNORE" not in kb.text and "apague" not in kb.text
     assert "archive" in kb.text and "ofertas@loja.com" in kb.text and "quero ver fretes" in kb.text
+
+
+def test_settled_hook_runs_after_execute_and_after_failure(sf: sessionmaker[Session]) -> None:
+    from src.gmail.actions import MissingScope
+
+    svc = ApprovalService(sf, JobStore(sf))
+    svc.approve([1, 2])
+    settled: list[int] = []
+    ExecuteActionFlow(svc, Store(sf), FakeGmail(), on_settled=settled.append).handle(_job(1))
+    ExecuteActionFlow(svc, Store(sf), FakeGmail(MissingScope("sem escopo")),
+                      on_settled=settled.append).handle(_job(2))
+    assert settled == [1, 2]
+    assert (_status(sf, 1), _status(sf, 2)) == ("executed", "failed")

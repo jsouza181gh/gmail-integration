@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from src.agent.types import Verdict
 from src.api.deps import ApiDeps, get_deps, require_user
 from src.chat.audio import MAX_AUDIO_BYTES, parse_wav
+from src.chat.continuation import CardWaiter
 from src.chat.events import card_event
 from src.llm.config import load_chat_config
 from src.chat.store import (
@@ -189,8 +190,11 @@ def confirm(card_id: int, body: ConfirmIn, request: Request) -> CardView:
     conversation = deps.chat.card_conversation(card_id)
     if conversation is not None:
         text = card_event(view, deps.chat.card_action_kinds(card_id))
-        turn = deps.chat.start_event_turn(conversation, text)
-        if turn is not None:
+        runs = view.kind == "actions" and view.status == "confirmed" and view.verdict == "approve"
+        if runs:  # the answer waits for the approved actions to run (progress meanwhile)
+            if deps.chat.start_event_turn(conversation, text, wait_card_id=card_id) is not None:
+                CardWaiter(deps.chat, deps.jobs).settle(card_id)  # all done already?
+        elif (turn := deps.chat.start_event_turn(conversation, text)) is not None:
             _enqueue(deps, turn)
     return view
 

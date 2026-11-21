@@ -25,6 +25,7 @@ from src.agent.types import (
     RuleDraft,
 )
 from src.chat.audio import WavInfo
+from src.chat.batches import batch_done_event, progress_text
 from src.db.models import (
     LlmCall,
     ChatMessageRef,
@@ -282,9 +283,12 @@ class ChatStore:
             conv.updated_at = now
         return self.turn(assistant_id)
 
-    def start_event_turn(self, conversation_id: int, text: str) -> TurnView | None:
+    def start_event_turn(
+        self, conversation_id: int, text: str, wait_card_id: int | None = None
+    ) -> TurnView | None:
         """An `[evento]` message plus a queued answer; None when the conversation
-        is busy (the user already moved on)."""
+        is busy (the user already moved on). With `wait_card_id` the answer
+        waits for that card's approved actions (settle_card releases it)."""
         now = self._now()
         with self.sf.begin() as s:
             conv = s.get(ChatConversation, conversation_id)
@@ -304,8 +308,55 @@ class ChatStore:
             s.add(event)
             s.flush()
             assistant_id = self._placeholder(s, conversation_id, event.id, now)
+            if wait_card_id is not None:
+                s.get_one(ChatMessage, assistant_id).wait_card_id = wait_card_id
             conv.updated_at = now
         return self.turn(assistant_id)
+
+    def cards_of_action(self, action_id: int) -> list[int]:
+        """Cards holding this action that have a continuation waiting on them."""
+        with self.sf() as s:
+            return list(s.scalars(
+                select(ChatCardItem.card_id)
+                .join(ChatMessage, ChatMessage.wait_card_id == ChatCardItem.card_id)
+                .where(ChatCardItem.action_id == action_id)
+                .distinct()
+            ))
+
+    def settle_card(self, card_id: int) -> int | None:
+        """Progress of the continuation waiting on `card_id`; once no action of
+        the card is still approved (each executed or failed), the event gets the
+        real results and the waiting answer's id is returned to be enqueued."""
+        with self.sf.begin() as s:
+            waiting = s.scalars(
+                select(ChatMessage).where(ChatMessage.wait_card_id == card_id,
+                                          ChatMessage.role == "assistant",
+                                          ChatMessage.status == "queued")
+            ).first()
+            if waiting is None:
+                return None
+            card = s.get_one(ChatCard, card_id)
+            actions = list(s.scalars(
+                select(SuggestedAction)
+                .join(ChatCardItem, ChatCardItem.action_id == SuggestedAction.id)
+                .where(ChatCardItem.card_id == card_id)
+                .order_by(ChatCardItem.position)
+            ))
+            kind = card.action or (actions[0].kind if actions else "trash")
+            executed = sum(a.status == "executed" for a in actions)
+            failed = [a for a in actions if a.status == "failed"]
+            if any(a.status == "approved" for a in actions):
+                waiting.progress = progress_text(kind, executed + len(failed), len(actions))
+                waiting.updated_at = self._now()
+                return None
+            if waiting.reply_to is not None:
+                s.get_one(ChatMessage, waiting.reply_to).text = batch_done_event(
+                    card_id, kind, executed, len(failed), failed[0].error if failed else None,
+                    card.batch_query, card.batch_total, card.batch_no,
+                )
+            waiting.wait_card_id, waiting.progress = None, None
+            waiting.updated_at = self._now()
+            return waiting.id
 
     def card_conversation(self, card_id: int) -> int | None:
         with self.sf() as s:

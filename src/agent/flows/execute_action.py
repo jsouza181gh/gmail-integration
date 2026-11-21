@@ -4,6 +4,7 @@ Not approved (pending, rejected, already executed) -> nothing happens.
 A missing OAuth scope fails the action for good; other errors propagate so
 the queue retries, and a dead job marks the action failed (worker hook).
 """
+from collections.abc import Callable
 from typing import Protocol
 
 from src.agent.approvals import ApprovalService
@@ -20,10 +21,18 @@ class ActionExecutor(Protocol):
 
 
 class ExecuteActionFlow:
-    def __init__(self, approvals: ApprovalService, store: Store, gmail: ActionExecutor) -> None:
+    def __init__(
+        self,
+        approvals: ApprovalService,
+        store: Store,
+        gmail: ActionExecutor,
+        on_settled: Callable[[int], None] = lambda action_id: None,
+    ) -> None:
         self.approvals = approvals
         self.store = store
         self.gmail = gmail
+        # the action reached executed/failed: a chat continuation may be waiting on it
+        self.on_settled = on_settled
 
     def handle(self, job: ClaimedJob) -> None:
         payload = job.payload
@@ -39,12 +48,15 @@ class ExecuteActionFlow:
         email = self.store.get_email(email_id)
         if kind is None or email is None:
             self.approvals.mark_failed(action_id, f"ação inválida ({kind_name}) ou e-mail ausente")
+            self.on_settled(action_id)
             return
         try:
             self.gmail.execute(kind, email)
         except MissingScope as exc:
             self.approvals.mark_failed(action_id, str(exc))
             log(f"ação #{action_id} falhou: {exc}")
+            self.on_settled(action_id)
             return
         self.approvals.mark_executed(action_id)
+        self.on_settled(action_id)
         log(f"ação #{action_id} executada: {kind} em {email_id}")

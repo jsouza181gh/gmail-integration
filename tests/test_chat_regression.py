@@ -97,7 +97,20 @@ def test_spam_cleanup_conversation(session_factory: sessionmaker[Session]) -> No
     r = api.client.post(f"/api/chat/cards/{actions_card.id}/confirm", json={"verdict": "approve"})
     assert r.status_code == 200 and r.json()["status"] == "confirmed"
     msgs = store.messages(conv)
-    assert msgs[-2].input == "event" and msgs[-2].text.startswith("[evento] O usuário aprovou 5")
+    assert msgs[-2].input == "event" and msgs[-1].progress == "apagando… 0/5"
     with sf() as s:
         kinds = [j.kind for j in s.scalars(select(Job).order_by(Job.id))]
-    assert kinds.count("execute_action") == 5 and kinds[-1] == "chat_turn"
+    assert kinds.count("execute_action") == 5 and kinds[-1] == "execute_action"  # waits
+
+    from src.chat.continuation import CardWaiter
+
+    waiter = CardWaiter(store, jobs)
+    for item in actions_card.items:
+        assert item.action_id is not None
+        api.deps.approvals.mark_executed(item.action_id)
+        waiter.on_action_settled(item.action_id)
+    msgs = store.messages(conv)
+    assert msgs[-2].text == f"[evento] Lote do cartão #{actions_card.id} (trash) concluído: 5 executada(s)."
+    with sf() as s:
+        last = s.scalars(select(Job).order_by(Job.id.desc())).first()
+    assert last is not None and (last.kind, last.chat_message_id) == ("chat_turn", msgs[-1].id)

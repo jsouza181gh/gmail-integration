@@ -140,3 +140,75 @@ def test_history_renders_refs(store: ChatStore, session_factory: sessionmaker[Se
     line = bot.text.splitlines()[-1]
     assert line.startswith("[e-mails desta resposta: m0 — Alerta 0 (Google Alerts <g@google.com>); ")
     assert "m9 — Alerta 9" in line and "m10" not in line
+
+
+def _approved_card(store: ChatStore, sf: sessionmaker[Session], n: int = 3,
+                   batch: bool = True) -> tuple[int, int, list[int]]:
+    from datetime import UTC, datetime
+
+    from src.db.models import SuggestedAction
+
+    ids: list[int] = []
+    with sf.begin() as s:
+        for i in range(n):
+            s.add(SuggestedAction(email_id=f"m{i}", kind="trash", reason="spam", status="approved",
+                                  origin="agent", created_at=datetime.now(UTC)))
+        s.flush()
+        ids = [a.id for a in s.query(SuggestedAction).order_by(SuggestedAction.id)]
+    conv = store.create_conversation()
+    turn = store.start_turn(conv.id, text="apaga o spam")
+    store.begin(turn.assistant.id)
+    draft = ActionsDraft(action_ids=tuple(ids), action="trash", verdict="approve")
+    if batch:
+        draft = draft.model_copy(update={"batch_query": "in:spam", "batch_total": 120, "batch_no": 1})
+    card = store.add_card(turn.assistant.id, "chat", draft)
+    store.finish(turn.assistant.id, "Lote 1 de 3.")
+    return conv.id, card, ids
+
+
+def _set(sf: sessionmaker[Session], action_id: int, status: str, error: str | None = None) -> None:
+    from src.db.models import SuggestedAction
+
+    with sf.begin() as s:
+        a = s.get_one(SuggestedAction, action_id)
+        a.status, a.error = status, error
+
+
+def test_continuation_waits_for_the_card_and_reports_results(
+    store: ChatStore, session_factory: sessionmaker[Session]
+) -> None:
+    for i in range(3):
+        add_email(session_factory, f"m{i}")
+    conv, card, ids = _approved_card(store, session_factory)
+    turn = store.start_event_turn(conv, "[evento] aprovou", wait_card_id=card)
+    assert turn is not None
+    assert store.settle_card(card) is None
+    assert store.turn(turn.assistant.id).assistant.progress == "apagando… 0/3"
+    _set(session_factory, ids[0], "executed")
+    assert store.settle_card(card) is None
+    assert store.turn(turn.assistant.id).assistant.progress == "apagando… 1/3"
+    _set(session_factory, ids[1], "executed")
+    _set(session_factory, ids[2], "failed", "404 not found")
+    assert store.settle_card(card) == turn.assistant.id
+    done = store.turn(turn.assistant.id)
+    assert done.assistant.progress is None and done.assistant.status == "queued"
+    assert done.user.text == (
+        f"[evento] Lote do cartão #{card} (trash) concluído: 2 executada(s), 1 falhou"
+        " (404 not found). Lote 1 de 3; restam ~70 na busca 'in:spam'."
+    )
+    assert store.settle_card(card) is None  # already released
+
+
+def test_settle_releases_at_once_when_everything_already_ran(
+    store: ChatStore, session_factory: sessionmaker[Session]
+) -> None:
+    for i in range(2):
+        add_email(session_factory, f"m{i}")
+    conv, card, ids = _approved_card(store, session_factory, n=2, batch=False)
+    for a in ids:
+        _set(session_factory, a, "executed")
+    turn = store.start_event_turn(conv, "[evento] aprovou", wait_card_id=card)
+    assert turn is not None and store.settle_card(card) == turn.assistant.id
+    assert store.turn(turn.assistant.id).user.text == (
+        f"[evento] Lote do cartão #{card} (trash) concluído: 2 executada(s)."
+    )
