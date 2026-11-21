@@ -175,3 +175,102 @@ def test_add_rule_unless_document(api: Api) -> None:
         "name": "lixo", "action": "trash", "sender_domain": "loja.com", "unless_document": True,
     })
     assert r.status_code == 200 and r.json()["unless_document"] is True
+
+
+def _answered_turn(api: Api, conv: int) -> int:
+    aid: int = api.client.post(f"/api/chat/conversations/{conv}/messages",
+                               json={"text": "regra"}).json()["assistant"]["id"]
+    api.deps.chat.begin(aid)
+    api.deps.chat.finish(aid, "Confere a regra?")
+    return aid
+
+
+def test_confirm_enqueues_continuation(api: Api) -> None:
+    conv = _conv(api)
+    aid = _answered_turn(api, conv)
+    card = api.deps.chat.add_card(aid, "chat", RuleDraft(
+        name="lixo", action="trash", sender_domain="loja.com", affected=0))
+    assert api.client.post(f"/api/chat/cards/{card}/confirm", json={}).status_code == 200
+    msgs = api.client.get(f"/api/chat/conversations/{conv}/messages").json()
+    event, placeholder = msgs[-2], msgs[-1]
+    assert event["input"] == "event" and event["role"] == "user"
+    assert event["text"].startswith(f"[evento] O usuário confirmou o cartão #{card}: regra 'lixo'")
+    assert placeholder["role"] == "assistant" and placeholder["status"] == "queued"
+    assert _jobs(api)[-1] == ("chat_turn", placeholder["id"])
+
+
+def test_confirm_when_busy_skips_continuation(api: Api) -> None:
+    conv = _conv(api)
+    aid = _answered_turn(api, conv)
+    card = api.deps.chat.add_card(aid, "chat", RuleDraft(
+        name="lixo", action="trash", sender_domain="loja.com", affected=0))
+    api.client.post(f"/api/chat/conversations/{conv}/messages", json={"text": "outra coisa"})
+    jobs = len(_jobs(api))
+    r = api.client.post(f"/api/chat/cards/{card}/confirm", json={})
+    assert r.status_code == 200 and r.json()["status"] == "confirmed"
+    assert len(_jobs(api)) == jobs
+
+
+def test_cancel_does_not_continue(api: Api) -> None:
+    conv = _conv(api)
+    aid = _answered_turn(api, conv)
+    card = api.deps.chat.add_card(aid, "chat", RuleDraft(
+        name="lixo", action="trash", sender_domain="loja.com", affected=0))
+    jobs = len(_jobs(api))
+    assert api.client.post(f"/api/chat/cards/{card}/cancel").status_code == 200
+    assert len(_jobs(api)) == jobs
+
+
+def test_models_lists_the_chat_chain(api: Api) -> None:
+    from src.llm.config import load_chat_config
+
+    r = api.client.get("/api/chat/models")
+    assert r.status_code == 200
+    assert r.json() == {"models": list(load_chat_config().models)}
+
+
+def test_text_turn_with_chosen_model(api: Api) -> None:
+    conv = _conv(api)
+    r = api.client.post(f"/api/chat/conversations/{conv}/messages",
+                        json={"text": "oi", "model": "gemini-3.6-flash"})
+    assert r.status_code == 200 and r.json()["user"]["model"] == "gemini-3.6-flash"
+    bad = api.client.post(f"/api/chat/conversations/{conv}/messages",
+                          json={"text": "oi", "model": "gpt-9"})
+    assert bad.status_code == 422
+
+
+def test_audio_turn_with_chosen_model(api: Api) -> None:
+    from tests.chat_fakes import wav
+
+    conv = _conv(api)
+    r = api.client.post(f"/api/chat/conversations/{conv}/audio?model=gemini-3.5-flash",
+                        content=wav(1.0), headers={"Content-Type": "audio/wav"})
+    assert r.status_code == 200 and r.json()["user"]["model"] == "gemini-3.5-flash"
+
+
+def test_turn_view_lists_failed_calls(api: Api) -> None:
+    from datetime import UTC, datetime
+
+    from src.db.models import AgentRun, LlmCall
+
+    conv = _conv(api)
+    aid = api.client.post(f"/api/chat/conversations/{conv}/messages",
+                          json={"text": "oi"}).json()["assistant"]["id"]
+    with api.sf.begin() as s:
+        s.add(AgentRun(id=50, trigger="chat", config_id=1, status="running",
+                       started_at=datetime.now(UTC)))
+        s.flush()
+        for model, kind, err in [("gemini-3.8-flash", "transient", "ReadTimeout: timed out"),
+                                 ("gemini-3.7-flash", "transient", "503 UNAVAILABLE"),
+                                 ("gemini-3.6-flash", None, None)]:
+            s.add(LlmCall(purpose="chat", model=model, attempt=1,
+                          status="error" if kind else "ok", error_kind=kind, error=err,
+                          latency_ms=1, input_tokens=0, output_tokens=0, total_tokens=0,
+                          cached_input_tokens=0, reasoning_tokens=0, audio_input_tokens=0,
+                          agent_run_id=50))
+    api.deps.chat.attach_run(aid, 50)
+    msgs = api.client.get(f"/api/chat/conversations/{conv}/messages").json()
+    assert msgs[-1]["failures"] == [
+        {"model": "gemini-3.8-flash", "reason": "não respondeu a tempo"},
+        {"model": "gemini-3.7-flash", "reason": "sobrecarregado (503)"},
+    ]

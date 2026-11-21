@@ -18,6 +18,7 @@ from src.db.models import (
     AgentConfig,
     Attachment,
     AutomationRule,
+    Email,
     KbEntry,
     SuggestedAction,
     ToolPolicy,
@@ -25,7 +26,7 @@ from src.db.models import (
 from src.jobs.store import JobStore
 from src.llm.types import JsonArgs, ToolCallRequest
 from tests.agent_fakes import FakeTaxonomy, make_ctx
-from tests.chat_fakes import add_email
+from tests.chat_fakes import SpamMail, add_email, spam_item
 
 
 def _run(trail: Trail, name: str, args: JsonArgs | None, deps: dict[str, object]) -> ToolExecution:
@@ -50,14 +51,17 @@ class ChatWorld:
         conv = self.store.create_conversation()
         self.message_id = self.store.start_turn(conv.id, text="oi").assistant.id
         self.trail = Trail(sf)
+        self.mail = SpamMail([spam_item("sp1"), spam_item("sp2", "Alerta do Google - Petr4")])
         self.deps: dict[str, object] = {
             "chat": ChatScope(conversation_id=conv.id, message_id=self.message_id,
                               channel="audio"),
             "cards": self.store,
+            "refs": self.store,
             "rules": self.rules,
             "actions": self.actions,
             "pending": self.approvals,
-            "lookup": DbEmailLookup(sf),
+            "lookup": DbEmailLookup(sf, self.mail),
+            "mail": self.mail,
             "docs": DbDocCatalog(sf),
             "taxonomy": FakeTaxonomy(),
         }
@@ -163,12 +167,56 @@ def test_list_pending_summarizes_and_cards(w: ChatWorld) -> None:
     assert res.ok and "2 pendente" in res.message.content and w.cards() == ["actions"]
 
 
-def test_propose_email_action_makes_actions_card(w: ChatWorld) -> None:
-    res = w.run("propose_email_action", {"email_id": "e1", "kind": "archive",
-                                         "reason": "pedido do usuário"})
-    assert res.ok and w.cards() == ["actions"]
-    assert not w.run("propose_email_action", {"email_id": "zz", "kind": "archive",
-                                              "reason": "x"}).ok
+def test_batch_one_card_for_many(w: ChatWorld) -> None:
+    for i in range(3, 6):
+        add_email(w.sf, f"e{i}")
+    res = w.run("propose_email_actions", {"kind": "archive", "reason": "pedido do usuário",
+                                          "email_ids": ["e1", "e2", "e3", "e4", "e5"]})
+    assert res.ok and "archive em 5 e-mail(s)" in res.message.content
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert card.kind == "actions" and len(card.items) == 5
+
+
+def test_batch_mixed_outcomes(w: ChatWorld) -> None:
+    w.pending_action("e2")
+    res = w.run("propose_email_actions", {"kind": "trash", "reason": "lixo",
+                                          "email_ids": ["e1", "e2", "gone"]})
+    text = res.message.content
+    assert res.ok and "trash em 2 e-mail(s)" in text
+    assert "já pendentes: 1" in text and "não existem mais no Gmail: 1" in text
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert len(card.items) == 2
+
+
+def test_batch_denied_by_policy_is_counted(w: ChatWorld) -> None:
+    with w.sf.begin() as s:
+        s.add(ToolPolicy(target="trash", trigger="chat", policy="deny"))
+    res = w.run("propose_email_actions", {"kind": "trash", "reason": "lixo",
+                                          "email_ids": ["e1", "e2"]})
+    assert not res.ok and "negados pela política: 2" in res.message.content
+    assert w.cards() == []
+
+
+def test_batch_by_gmail_query_caps_at_50(w: ChatWorld) -> None:
+    w.mail.items = {f"q{i}": spam_item(f"q{i}") for i in range(120)}
+    w.mail.page_size = 40
+    res = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
+                                          "gmail_query": "in:spam from:googlealerts-noreply@google.com"})
+    assert res.ok and "trash em 50 e-mail(s)" in res.message.content
+    assert w.mail.queries[0].include_spam_trash is True
+    assert w.count(SuggestedAction) == 50
+
+
+def test_batch_requires_exactly_one_source(w: ChatWorld) -> None:
+    both = w.run("propose_email_actions", {"kind": "trash", "reason": "x", "email_ids": ["e1"],
+                                           "gmail_query": "in:spam"})
+    neither = w.run("propose_email_actions", {"kind": "trash", "reason": "x"})
+    assert not both.ok and not neither.ok
+    assert "informe email_ids ou gmail_query" in neither.message.content
+
+
+def test_propose_email_action_is_gone() -> None:
+    assert build_registry().get("propose_email_action") is None
 
 
 def test_show_emails_and_share_documents(w: ChatWorld) -> None:
@@ -202,9 +250,93 @@ def test_chat_registry_offers_only_chat_tools() -> None:
     assert chat == {
         "list_emails", "list_labels", "search_mail", "read_email", "find_documents",
         "list_rules", "sender_stats", "show_emails", "share_documents", "list_pending",
-        "decide_pending", "propose_email_action", "propose_rule", "propose_preference",
+        "decide_pending", "propose_email_actions", "propose_rule", "propose_preference",
         "propose_promotion", "propose_policy",
     }
     for name in ("classify_email", "get_email_body", "sender_history", "propose_action"):
         entry = reg.get(name)
         assert entry is not None and entry.contexts == frozenset({"webhook"})
+
+
+def test_ensure_fetches_and_stores_unknown_id(w: ChatWorld) -> None:
+    row = DbEmailLookup(w.sf, w.mail).ensure("sp1")
+    assert row is not None and row.source == "chat"
+    assert row.sender == "Google Alerts <googlealerts-noreply@google.com>"
+    with w.sf() as s:
+        stored = s.get(Email, "sp1")
+        assert stored is not None and stored.source == "chat" and stored.received_at is not None
+
+
+def test_ensure_unknown_in_gmail_returns_none(w: ChatWorld) -> None:
+    assert DbEmailLookup(w.sf, w.mail).ensure("gone") is None
+
+
+def test_show_emails_accepts_spam_ids(w: ChatWorld) -> None:
+    res = w.run("show_emails", {"email_ids": ["sp1", "sp2"]})
+    assert res.ok and "2 e-mail(s)" in res.message.content
+    (card,) = w.store.turn(w.message_id).assistant.cards
+    assert [i.email_id for i in card.items] == ["sp1", "sp2"]
+
+
+def test_show_emails_gone_id_message(w: ChatWorld) -> None:
+    res = w.run("show_emails", {"email_ids": ["gone"]})
+    assert not res.ok and "não existe mais no Gmail" in res.message.content
+
+
+def test_read_email_of_spam_id_reads_gmail_body(w: ChatWorld) -> None:
+    res = w.run("read_email", {"email_id": "sp1"})
+    assert res.ok and "corpo de sp1" in res.message.content
+
+
+def _refs(w: ChatWorld) -> list[str]:
+    from src.db.models import ChatMessageRef
+
+    with w.sf() as s:
+        return [r.email_id for r in s.query(ChatMessageRef).order_by(ChatMessageRef.position)]
+
+
+def test_list_emails_records_refs_only_in_chat(w: ChatWorld) -> None:
+    deps = {k: v for k, v in w.deps.items() if k != "chat"}
+    assert _run(w.trail, "list_emails", {"query": "in:spam"}, deps).ok
+    assert _refs(w) == []
+    assert w.run("list_emails", {"query": "in:spam"}).ok
+    assert _refs(w) == ["sp1", "sp2"]
+
+
+def test_show_and_search_record_refs(w: ChatWorld) -> None:
+    assert w.run("show_emails", {"email_ids": ["e1", "sp1"]}).ok
+    assert _refs(w) == ["e1", "sp1"]
+
+
+def test_propose_rule_unknown_sender_suggests_close_match(w: ChatWorld) -> None:
+    add_email(w.sf, "ga", sender="Google Alerts <googlealerts-noreply@google.com>")
+    res = w.run("propose_rule", {"name": "alertas", "action": "trash",
+                                 "sender_address": "google-alerts-noreply@google.com"})
+    assert not res.ok
+    assert "nenhum e-mail de google-alerts-noreply@google.com" in res.message.content
+    assert "parecido: googlealerts-noreply@google.com" in res.message.content
+    ok = w.run("propose_rule", {"name": "alertas", "action": "trash",
+                                "sender_address": "googlealerts-noreply@google.com"})
+    assert ok.ok
+
+
+def test_chat_prompt_v2_mentions_batch_tool_only() -> None:
+    from src.agent.prompts import CHAT_PROMPT_V2
+
+    assert "propose_email_actions" in CHAT_PROMPT_V2
+    assert "propose_email_action " not in CHAT_PROMPT_V2
+    assert "propose_email_action(" not in CHAT_PROMPT_V2
+    assert "[evento]" in CHAT_PROMPT_V2
+
+
+def test_propose_rule_unseen_sender_without_close_match_is_allowed(w: ChatWorld) -> None:
+    res = w.run("propose_rule", {"name": "novo", "action": "trash",
+                                 "sender_address": "promo@desconhecido.com.br"})
+    assert res.ok and "nenhum e-mail de promo@desconhecido.com.br guardado ainda" in res.message.content
+    assert w.cards() == ["rule"]
+
+
+def test_list_emails_in_chat_caps_at_25(w: ChatWorld) -> None:
+    w.mail.items = {f"q{i}": spam_item(f"q{i}") for i in range(60)}
+    assert w.run("list_emails", {"query": "in:spam", "max_results": 100}).ok
+    assert w.mail.queries[-1].max_results == 25

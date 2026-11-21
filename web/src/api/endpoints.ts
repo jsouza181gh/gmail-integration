@@ -136,13 +136,15 @@ export const chatMessages = (conversationId: number) =>
   request('GET', `/api/chat/conversations/${conversationId}/messages`, {
     schema: z.array(s.ChatMessage),
   })
-export const sendText = (conversationId: number, text: string) =>
+export const chatModels = () => request('GET', '/api/chat/models', { schema: s.ChatModels })
+/** `model` pins one model of the chat chain for the turn; null = the chain. */
+export const sendText = (conversationId: number, text: string, model: string | null = null) =>
   request('POST', `/api/chat/conversations/${conversationId}/messages`, {
-    body: { text },
+    body: model ? { text, model } : { text },
     schema: s.Turn,
   })
-export const sendAudio = (conversationId: number, wav: Blob) =>
-  request('POST', `/api/chat/conversations/${conversationId}/audio`, {
+export const sendAudio = (conversationId: number, wav: Blob, model: string | null = null) =>
+  request('POST', `/api/chat/conversations/${conversationId}/audio${model ? `?model=${encodeURIComponent(model)}` : ''}`, {
     raw: wav,
     contentType: 'audio/wav',
     schema: s.Turn,

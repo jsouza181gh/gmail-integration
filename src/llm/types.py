@@ -8,7 +8,8 @@ from langchain_core.messages.ai import UsageMetadata
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 
-ErrorKind = Literal["rate", "transient", "bad_output", "fatal"]
+# quota: every model of the chain is out of its daily quota (raised, never recorded)
+ErrorKind = Literal["rate", "transient", "bad_output", "fatal", "quota"]
 
 
 class Schema(BaseModel):
@@ -42,12 +43,15 @@ class ChatMessage(Schema):
     # role "ai" only: provider reasoning signatures per tool call id (base64),
     # echoed back so the model keeps its own reasoning across tool turns
     signatures: dict[str, str] = {}
+    # role "ai" only: the model that produced `signatures` (another model gets
+    # the neutral signature instead)
+    signatures_model: str | None = None
 
     @model_validator(mode="after")
     def _check_tool_fields(self) -> Self:
         if self.parts and self.role != "human":
             raise ValueError("parts só em mensagens 'human'")
-        if (self.tool_calls or self.signatures) and self.role != "ai":
+        if (self.tool_calls or self.signatures or self.signatures_model) and self.role != "ai":
             raise ValueError("tool_calls/signatures só em mensagens 'ai'")
         if (self.tool_call_id is not None) != (self.role == "tool"):
             raise ValueError("tool_call_id é obrigatório em 'tool' e proibido nos demais")
@@ -83,6 +87,8 @@ class Prompt(Schema):
     context: CallContext = CallContext()
     # cap on attempts for this call (interactive callers fail fast); None = gateway default
     attempts: int | None = None
+    # only these models (the user pinned one in the chat); None = the gateway's chain
+    models: tuple[str, ...] | None = None
 
 
 class TokenUsage(Schema):

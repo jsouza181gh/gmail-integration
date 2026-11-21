@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.agent.prompts import CHAT_PROMPT_V1
+from src.agent.prompts import CHAT_PROMPT_V2
 from src.agent.settings import Channel, audit
 from src.db.models import AgentConfig
 from src.db.rows import AgentConfigRow
@@ -53,7 +53,7 @@ class DbAgentConfigs:
             active = s.scalars(select(AgentConfig).where(AgentConfig.active)).first()
             before = active.version if active else None
             if chat_prompt is None or not chat_prompt.strip():
-                chat_prompt = active.chat_prompt if active else CHAT_PROMPT_V1
+                chat_prompt = active.chat_prompt if active else CHAT_PROMPT_V2
             version = (s.scalar(select(func.max(AgentConfig.version))) or 0) + 1
             s.execute(update(AgentConfig).values(active=False))
             row = AgentConfig(version=version, active=True, decide_prompt=decide_prompt,

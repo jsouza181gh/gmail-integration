@@ -30,7 +30,7 @@ from src.gmail.labels import GmailLabeler
 from src.gmail.reader import GmailReader
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
-from src.llm.config import build_gateway
+from src.llm.config import build_chat_gateway, build_gateway
 from src.llm.gateway import LLMGateway
 from src.llm.recorder import DbCallRecorder
 
@@ -38,9 +38,16 @@ from src.llm.recorder import DbCallRecorder
 class Agent:
     """The wired agent pieces a worker needs."""
 
-    def __init__(self, store: Store, jobs: JobStore, gateway: LLMGateway | None = None) -> None:
+    def __init__(
+        self,
+        store: Store,
+        jobs: JobStore,
+        gateway: LLMGateway | None = None,
+        chat_gateway: LLMGateway | None = None,
+    ) -> None:
         sf = store.sf
         gateway = gateway or build_gateway(DbCallRecorder(sf))
+        chat_gateway = chat_gateway or build_chat_gateway(DbCallRecorder(sf))
         self.trail = Trail(sf)
         self.policy = PolicyResolver(sf)
         self.actions = ActionService(sf, jobs, self.policy)
@@ -52,7 +59,7 @@ class Agent:
         self.approvals = ApprovalService(sf, jobs)
         self.chat_store = ChatStore(sf)
         retriever = DbRetriever(IndexStore(sf), gateway)
-        lookup = DbEmailLookup(sf)
+        lookup = DbEmailLookup(sf, mail)
         docs = DbDocCatalog(sf)
         rules = RuleAdmin(sf)
 
@@ -77,6 +84,7 @@ class Agent:
                 pending=self.approvals,
                 rules=rules,
                 cards=self.chat_store,
+                refs=self.chat_store,
             )
 
         def context_factory(run: RunScope, email_id: str) -> AgentContext:
@@ -102,10 +110,10 @@ class Agent:
         self.chat_turn = ChatTurnFlow(
             store=self.chat_store,
             trail=self.trail,
-            loop=AgentLoop(self.executor, self.trail, gateway),
+            loop=AgentLoop(self.executor, self.trail, chat_gateway),
             configs=DbAgentConfigs(sf),
             kb=kb,
             approvals=self.approvals,
             context_factory=chat_context,
-            structured=gateway,
+            structured=chat_gateway,
         )

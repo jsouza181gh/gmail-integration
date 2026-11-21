@@ -10,13 +10,15 @@ from src.agent.ports import (
     DocCatalog,
     EmailLookup,
     MailReader,
+    RefSink,
     Retriever,
     RuleReader,
     SenderHistorySource,
 )
 from src.agent.state import StateUpdate
 from src.agent.tools.mail import NoState
-from src.agent.types import DocHit, MailHit
+from src.agent.tools.refs import remember
+from src.agent.types import DocHit, EmailRef, MailHit
 from src.db.rows import RuleRow
 from src.llm.types import CallContext
 
@@ -37,6 +39,8 @@ def money(cents: int) -> str:
 class SearchCtx(Deps):
     retriever: Retriever
     call: CallContext
+    refs: RefSink | None = None
+    message_id: int | None = None
 
 
 class ReadCtx(Deps):
@@ -108,6 +112,9 @@ def search_mail(
     hits = ctx.retriever.search(query, max(1, min(limit, SEARCH_MAX)), ctx.call)
     if not hits:
         return "nada encontrado", None
+    remember(ctx.refs, ctx.message_id, (
+        EmailRef(email_id=h.id, subject=h.title, sender=h.sender) for h in hits if h.kind == "email"
+    ))
     return fenced("\n".join(_hit_line(h) for h in hits)), None
 
 
@@ -122,9 +129,9 @@ def read_email(
         email_id: Id from search_mail or list_emails.
     """
     ctx = runtime.context
-    email = ctx.lookup.email(email_id)
+    email = ctx.lookup.ensure(email_id)
     if email is None:
-        raise ValueError(f"e-mail não encontrado: {email_id}")
+        raise ValueError(f"esse e-mail não existe mais no Gmail: {email_id}")
     body = ctx.lookup.body(email_id)
     if body is None:
         body = ctx.mail.get_body(email_id)

@@ -102,3 +102,41 @@ def test_turn_view_resolves_item_titles(
     assert docs.items[0].title == "Boleto Light novembro"
     assert docs.items[0].attachment_id == 1 and "boleto" in docs.items[0].subtitle
     assert (actions.status, actions.channel, actions.verdict) == ("proposed", "audio", "reject")
+
+
+def _answered(store: ChatStore, text: str = "oi") -> tuple[int, int]:
+    conv = store.create_conversation()
+    turn = store.start_turn(conv.id, text=text)
+    store.begin(turn.assistant.id)
+    return conv.id, turn.assistant.id
+
+
+def test_add_refs_dedupes_and_caps(store: ChatStore, session_factory: sessionmaker[Session]) -> None:
+    from src.agent.types import EmailRef
+    from src.db.models import ChatMessageRef
+
+    for i in range(23):
+        add_email(session_factory, f"m{i}", subject=f"assunto {i}")
+    _, answer = _answered(store)
+    refs = [EmailRef(email_id=f"m{i}", subject=f"assunto {i}", sender="a@b.c") for i in range(23)]
+    store.add_refs(answer, refs[:3])
+    store.add_refs(answer, [refs[0], refs[1], *refs[3:]])
+    with session_factory() as s:
+        got = s.query(ChatMessageRef).order_by(ChatMessageRef.position).all()
+    assert [r.email_id for r in got] == [f"m{i}" for i in range(20)]
+
+
+def test_history_renders_refs(store: ChatStore, session_factory: sessionmaker[Session]) -> None:
+    from src.agent.types import EmailRef
+
+    for i in range(12):
+        add_email(session_factory, f"m{i}")
+    conv, answer = _answered(store)
+    store.add_refs(answer, [EmailRef(email_id=f"m{i}", subject=f"Alerta {i}",
+                                     sender="Google Alerts <g@google.com>") for i in range(12)])
+    store.finish(answer, "Achei estes.")
+    nxt = store.start_turn(conv, text="apaga esses")
+    (_, bot) = store.history(conv, before_id=nxt.user.id)
+    line = bot.text.splitlines()[-1]
+    assert line.startswith("[e-mails desta resposta: m0 — Alerta 0 (Google Alerts <g@google.com>); ")
+    assert "m9 — Alerta 9" in line and "m10" not in line

@@ -66,6 +66,10 @@ class Email(Base):
     body: Mapped[str | None] = mapped_column(Text)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     index_error: Mapped[str | None] = mapped_column(Text)
+    # inbox: came from the sync/backfill; chat: fetched on demand by a chat tool
+    # (spam, trash, old mail) and kept out of the panel's lists
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="inbox",
+                                        server_default="inbox")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -625,8 +629,22 @@ class ChatMessage(Base):
     error: Mapped[str | None] = mapped_column(Text)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id"))
     reply_to: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"))
+    # user messages: the model the user pinned for this turn (None = the chain)
+    model: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ChatMessageRef(Base):
+    """An email an assistant answer referenced, so later turns can say "those"."""
+
+    __tablename__ = "chat_message_refs"
+
+    message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), nullable=False)
+    subject: Mapped[str | None] = mapped_column(Text)
+    sender: Mapped[str | None] = mapped_column(Text)
 
 
 class ChatAudio(Base):

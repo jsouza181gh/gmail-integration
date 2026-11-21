@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -101,6 +102,16 @@ class FakeClock:
         self.t += seconds
 
 
+class Wall:
+    """Wall clock for daily-quota memory; starts 2026-11-20 15:00 UTC."""
+
+    def __init__(self) -> None:
+        self.at = datetime(2026, 11, 20, 15, 0, tzinfo=UTC)
+
+    def now(self) -> datetime:
+        return self.at
+
+
 P = Prompt(purpose="test", messages=(ChatMessage(role="human", content="oi"),))
 
 
@@ -114,6 +125,7 @@ def gw(
     mode: str = "fast",
     rpm: int = 15,
     max_attempts: int = 8,
+    wall: "Wall | None" = None,
 ) -> LLMGateway:
     sleep_list = sleeps if sleeps is not None else []
     return LLMGateway(
@@ -125,6 +137,7 @@ def gw(
         chat_factory=chats.__getitem__,
         sleep=clock.sleep if clock else sleep_list.append,
         clock=clock.now if clock else (lambda: 0.0),
+        wall=(wall or Wall()).now,
     )
 
 
@@ -423,7 +436,7 @@ def test_long_rate_limit_fails_fast() -> None:
     chat = FakeChat([RuntimeError("429 RESOURCE_EXHAUSTED quota PerDay; retry in 3600s")])
     with pytest.raises(LLMExhaustedError) as e:
         gw(chats={"m1": chat}, sleeps=sleeps).generate_structured(P, Out)
-    assert e.value.kinds == ("rate",) and quota_exhausted(e.value)
+    assert e.value.kinds == ("quota",) and quota_exhausted(e.value)
     assert sleeps == []
 
 
@@ -507,7 +520,7 @@ def test_pace_reserves_slots_across_threads() -> None:
     g = LLMGateway(["m1"], mode="free", rpm=15, chat_factory=lambda m: FakeChat([]),
                    sleep=sleeps.append, clock=lambda: 0.0)
     for _ in range(3):
-        t = threading.Thread(target=g._pace)
+        t = threading.Thread(target=g._pace, args=("m1",))
         t.start()
         t.join()
     assert sleeps == [4.0, 8.0]
@@ -529,3 +542,164 @@ def test_chat_clients_are_per_thread() -> None:
     t.start()
     t.join()
     assert made == ["m1", "m1"]
+
+
+DAILY = "429 RESOURCE_EXHAUSTED quotaId GenerateRequestsPerDayPerProjectPerModel; retry in 30s"
+
+
+def test_quota_gone_marks_model_and_moves_on() -> None:
+    sleeps: list[float] = []
+    chats = {"A": FakeChat([RuntimeError(DAILY)]), "B": FakeChat([Out(x=1), Out(x=2)])}
+    g = gw(models=["A", "B"], chats=chats, sleeps=sleeps)
+    assert g.generate_structured(P, Out).model == "B" and sleeps == []
+    assert g.generate_structured(P, Out).model == "B"  # A is not called again today
+    assert chats["A"].runnable.script == []
+
+
+def test_exhausted_resets_at_pacific_midnight() -> None:
+    wall = Wall()
+    chats = {"A": FakeChat([RuntimeError(DAILY), Out(x=3)]), "B": FakeChat([Out(x=1), Out(x=2)])}
+    g = gw(models=["A", "B"], chats=chats, wall=wall)
+    g.generate_structured(P, Out)
+    wall.at = datetime(2026, 11, 21, 7, 59, tzinfo=UTC)  # 23:59 PST
+    assert g.generate_structured(P, Out).model == "B"
+    wall.at = datetime(2026, 11, 21, 8, 1, tzinfo=UTC)  # 00:01 PST
+    assert g.generate_structured(P, Out).model == "A"
+
+
+def test_all_exhausted_fails_fast() -> None:
+    sleeps: list[float] = []
+    chats = {"A": FakeChat([RuntimeError(DAILY)]), "B": FakeChat([RuntimeError(DAILY)])}
+    g = gw(models=["A", "B"], chats=chats, sleeps=sleeps)
+    with pytest.raises(LLMExhaustedError) as e:
+        g.generate_structured(P, Out)
+    assert e.value.kinds == ("quota",) and sleeps == []
+    with pytest.raises(LLMExhaustedError):
+        g.generate_structured(P, Out)
+
+
+def test_transient_switches_model_without_sleep() -> None:
+    sleeps: list[float] = []
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE")]), "B": FakeChat([Out(x=1)])}
+    assert gw(models=["A", "B"], chats=chats, sleeps=sleeps).generate_structured(P, Out).model == "B"
+    assert sleeps == []
+
+
+def test_transient_on_single_model_still_backs_off() -> None:
+    sleeps: list[float] = []
+    chat = FakeChat([RuntimeError("503 UNAVAILABLE"), Out(x=1)])
+    gw(chats={"m1": chat}, sleeps=sleeps).generate_structured(P, Out)
+    assert len(sleeps) == 1
+
+
+def test_foreign_signatures_replaced() -> None:
+    call = ToolCallRequest(id="c1", name="get_email_body", args={"email_id": "a"})
+    prompt = Prompt(
+        purpose="chat",
+        messages=(
+            ChatMessage(role="human", content="oi"),
+            ChatMessage(role="ai", content="", tool_calls=(call,), signatures={"c1": "c2ln"},
+                        signatures_model="A"),
+            ChatMessage(role="tool", content="corpo", tool_call_id="c1"),
+        ),
+    )
+    chats = {"B": FakeChat([], [ai_turn("ok")])}
+    gw(models=["B"], chats=chats).generate_turn(prompt, [get_email_body])
+    ai = chats["B"].tool_runnable.seen[0][1]
+    assert ai.additional_kwargs[SIG_KEY] == {"c1": "skip/thought/signature/validator"}
+
+
+def test_own_signatures_kept() -> None:
+    call = ToolCallRequest(id="c1", name="get_email_body", args={"email_id": "a"})
+    prompt = Prompt(purpose="chat", messages=(
+        ChatMessage(role="human", content="oi"),
+        ChatMessage(role="ai", content="", tool_calls=(call,), signatures={"c1": "c2ln"},
+                    signatures_model="B"),
+        ChatMessage(role="tool", content="corpo", tool_call_id="c1"),
+    ))
+    chats = {"B": FakeChat([], [ai_turn("ok")])}
+    gw(models=["B"], chats=chats).generate_turn(prompt, [get_email_body])
+    assert chats["B"].tool_runnable.seen[0][1].additional_kwargs[SIG_KEY] == {"c1": "c2ln"}
+
+
+def test_chat_config_default_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.llm.config import load_chat_config
+
+    monkeypatch.delenv("CHAT_MODELS", raising=False)
+    assert load_chat_config().models == (
+        "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+        "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+    )
+
+
+def test_full_cycle_of_failures_backs_off_once() -> None:
+    sleeps: list[float] = []
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE"), Out(x=1)]),
+             "B": FakeChat([RuntimeError("503 UNAVAILABLE")])}
+    res = gw(models=["A", "B"], chats=chats, sleeps=sleeps).generate_structured(P, Out)
+    assert res.model == "A" and len(sleeps) == 1  # A fails, B fails -> wait -> A
+
+
+def test_neutral_signature_is_standard_base64() -> None:
+    import base64
+
+    from src.llm.gateway import NEUTRAL_SIGNATURE
+
+    # LangChain decodes signatures as standard base64; Gemini documents the
+    # urlsafe spelling "skip_thought_signature_validator" - same bytes.
+    assert base64.b64decode(NEUTRAL_SIGNATURE, validate=True) == base64.urlsafe_b64decode(
+        "skip_thought_signature_validator"
+    )
+
+
+def test_sticks_to_last_working_model() -> None:
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE")]), "B": FakeChat([Out(x=1), Out(x=2)])}
+    g = gw(models=["A", "B"], chats=chats)
+    assert g.generate_structured(P, Out).model == "B"
+    assert g.generate_structured(P, Out).model == "B"  # A is not tried first again
+
+
+def test_sticky_model_expires_after_ten_minutes() -> None:
+    wall = Wall()
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE"), Out(x=3)]), "B": FakeChat([Out(x=1)])}
+    g = gw(models=["A", "B"], chats=chats, wall=wall)
+    g.generate_structured(P, Out)
+    wall.at = wall.at + timedelta(minutes=11)
+    assert g.generate_structured(P, Out).model == "A"
+
+
+def test_chat_gateway_uses_short_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.llm.config import CHAT_TIMEOUT_S, build_chat_gateway
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    client = build_chat_gateway()._chat_factory("gemini-3.6-flash")
+    assert CHAT_TIMEOUT_S == 15 and getattr(client, "timeout") == 15
+
+
+def test_failed_model_cools_down_for_five_minutes() -> None:
+    wall = Wall()
+    chats = {
+        "A": FakeChat([RuntimeError("503 UNAVAILABLE"), Out(x=9)]),
+        "B": FakeChat([Out(x=1), RuntimeError("503 UNAVAILABLE")]),
+        "C": FakeChat([Out(x=2)]),
+    }
+    g = gw(models=["A", "B", "C"], chats=chats, wall=wall)
+    assert g.generate_structured(P, Out).model == "B"
+    assert g.generate_structured(P, Out).model == "C"  # B fails; A still cooling
+    wall.at = wall.at + timedelta(minutes=11)
+    assert g.generate_structured(P, Out).model == "A"
+
+
+def test_free_mode_paces_per_model() -> None:
+    clock = FakeClock()
+    chats = {"A": FakeChat([RuntimeError("503 UNAVAILABLE")]), "B": FakeChat([Out(x=1)])}
+    gw(mode="free", rpm=15, clock=clock, models=["A", "B"], chats=chats).generate_structured(P, Out)
+    assert clock.slept == []  # B has its own per-minute quota: no wait after A
+
+
+def test_prompt_models_restrict_the_chain() -> None:
+    chats = {"A": FakeChat([]), "B": FakeChat([RuntimeError("503 UNAVAILABLE")] * 2)}
+    prompt = P.model_copy(update={"models": ("B",), "attempts": 2})
+    with pytest.raises(LLMExhaustedError):
+        gw(models=["A", "B"], chats=chats).generate_structured(prompt, Out)
+    assert chats["A"].runnable.script == []  # untouched: never called

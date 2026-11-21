@@ -10,6 +10,7 @@ from collections.abc import Callable
 from html.parser import HTMLParser
 
 from googleapiclient.discovery import Resource
+from googleapiclient.errors import HttpError
 from pydantic import BaseModel
 
 from src.agent.types import LabelInfo, MailItem, MailPage, MailQuery
@@ -17,6 +18,7 @@ from src.agent.types import LabelInfo, MailItem, MailPage, MailQuery
 USER_ID = "me"
 BODY_MAX_CHARS = 6000
 MAX_RESULTS_LIMIT = 100
+BATCH_SIZE = 50  # Gmail's recommended batch size
 SUMMARY_HEADERS = ["From", "Subject", "Date"]
 _INVISIBLE_RE = re.compile(r"[​-‏⁠﻿⠀\xa0]")
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "table", "section"}
@@ -149,10 +151,45 @@ class GmailReader:
         ).execute(num_retries=5)
         return extract_body(_Message.model_validate(raw).payload)
 
-    def _item(self, service: Resource, message_id: str) -> MailItem:
-        raw = service.users().messages().get(
+    def item(self, email_id: str) -> MailItem | None:
+        """Metadata of one message; None when Gmail no longer has it."""
+        try:
+            return self._item(self._service(), email_id)
+        except HttpError as e:
+            if e.resp.status == 404:
+                return None
+            raise
+
+    @staticmethod
+    def _get(service: Resource, message_id: str) -> object:
+        return service.users().messages().get(
             userId=USER_ID, id=message_id, format="metadata", metadataHeaders=SUMMARY_HEADERS
-        ).execute(num_retries=5)
+        )
+
+    def _items(self, service: Resource, ids: list[str]) -> tuple[MailItem, ...]:
+        """Metadata of many messages: one HTTP batch per 50 when the client
+        supports it (a page of 100 took minutes one by one)."""
+        if not ids or not hasattr(service, "new_batch_http_request"):
+            return tuple(self._item(service, i) for i in ids)
+        found: dict[str, MailItem] = {}
+
+        def done(request_id: str, response: object, exc: Exception | None) -> None:
+            if exc is None:
+                item = self._to_item(response)
+                found[item.id] = item
+
+        for start in range(0, len(ids), BATCH_SIZE):
+            batch = service.new_batch_http_request()
+            for i in ids[start:start + BATCH_SIZE]:
+                batch.add(self._get(service, i), callback=done)
+            batch.execute()
+        return tuple(found[i] for i in ids if i in found)
+
+    def _item(self, service: Resource, message_id: str) -> MailItem:
+        return self._to_item(self._get(service, message_id).execute(num_retries=5))  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _to_item(raw: object) -> MailItem:
         msg = _Message.model_validate(raw)
         headers = {h.name: h.value for h in msg.payload.headers}
         return MailItem(
@@ -184,7 +221,7 @@ class GmailReader:
             service.users().messages().list(**params).execute(num_retries=5)
         )
         return MailPage(
-            items=tuple(self._item(service, m.id) for m in page.messages),
+            items=self._items(service, [m.id for m in page.messages]),
             next_page_token=page.nextPageToken,
             result_size_estimate=page.resultSizeEstimate,
         )

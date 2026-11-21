@@ -2,7 +2,7 @@
 
 None of them changes a rule, preference, policy or approval: each writes a
 card on the turn in progress and the user confirms it in the panel
-(`src.chat.cards.CardService`). `propose_email_action` goes through the
+(`src.chat.cards.CardService`). `propose_email_actions` goes through the
 normal action sink, so it obeys the chat policies like any proposal.
 """
 from collections import Counter
@@ -17,20 +17,25 @@ from src.agent.ports import (
     CardSink,
     DocCatalog,
     EmailLookup,
+    MailReader,
     PendingReader,
+    RefSink,
     RuleReader,
     TaxonomySource,
 )
 from src.agent.rules import RuleCondition
 from src.agent.state import StateUpdate
 from src.agent.tools.mail import NoState
+from src.agent.tools.refs import remember
 from src.agent.types import (
     NEVER_AUTO,
     ActionKind,
     ActionsDraft,
     DocumentsDraft,
+    EmailRef,
     EmailsDraft,
     KbScopeName,
+    MailQuery,
     PolicyDecision,
     PolicyDraft,
     PolicyTarget,
@@ -43,6 +48,7 @@ from src.agent.types import (
 )
 
 SHOW_EMAILS_MAX = 10
+BATCH_MAX = 50
 SHARE_MAX = 5
 PENDING_CARD_MAX = 50
 KB_TEXT_MAX = 1000
@@ -54,7 +60,11 @@ class CardCtx(Deps):
     chat: ChatScope
 
 
-class EmailsCtx(CardCtx):
+class RefCardCtx(CardCtx):
+    refs: RefSink
+
+
+class EmailsCtx(RefCardCtx):
     lookup: EmailLookup
 
 
@@ -66,9 +76,10 @@ class PendingCtx(CardCtx):
     pending: PendingReader
 
 
-class ProposeActionCtx(CardCtx):
+class ProposeActionCtx(RefCardCtx):
     actions: ActionSink
     lookup: EmailLookup
+    mail: MailReader
     run: RunScope
 
 
@@ -96,12 +107,15 @@ def show_emails(
         email_ids: Up to 10 ids from search_mail or list_emails.
     """
     ctx = runtime.context
-    found = [i for i in dict.fromkeys(email_ids[:SHOW_EMAILS_MAX]) if ctx.lookup.email(i)]
+    rows = [r for i in dict.fromkeys(email_ids[:SHOW_EMAILS_MAX]) if (r := ctx.lookup.ensure(i))]
+    found = [r.id for r in rows]
     missing = [i for i in email_ids[:SHOW_EMAILS_MAX] if i not in found]
+    remember(ctx.refs, ctx.chat.message_id,
+             (EmailRef(email_id=r.id, subject=r.subject, sender=r.sender) for r in rows))
     if not found:
-        raise ValueError("nenhum desses e-mails está guardado")
+        raise ValueError(f"não existe mais no Gmail: {', '.join(missing)}")
     card = _card(ctx, EmailsDraft(email_ids=tuple(found)))
-    note = f"; não encontrados: {', '.join(missing)}" if missing else ""
+    note = f"; não existe mais no Gmail: {', '.join(missing)}" if missing else ""
     return f"cartão #{card}: {len(found)} e-mail(s) mostrado(s){note}", None
 
 
@@ -180,30 +194,72 @@ def decide_pending(
     return f"cartão #{card}: {word} {len(rows)} sugestão(ões); {WAITING}", None
 
 
+def _batch_ids(ctx: ProposeActionCtx, email_ids: list[str] | None,
+               gmail_query: str | None) -> list[str]:
+    if (email_ids is None) == (gmail_query is None):
+        raise ValueError("informe email_ids ou gmail_query (só um dos dois)")
+    if email_ids is not None:
+        return list(dict.fromkeys(email_ids))[:BATCH_MAX]
+    ids: list[str] = []
+    token: str | None = None
+    while len(ids) < BATCH_MAX:
+        page = ctx.mail.list_messages(MailQuery(
+            query=gmail_query, max_results=BATCH_MAX - len(ids), page_token=token,
+            include_spam_trash=True,
+        ))
+        ids += [i.id for i in page.items if i.id not in ids]
+        token = page.next_page_token
+        if token is None or not page.items:
+            break
+    return ids[:BATCH_MAX]
+
+
 @tool(response_format="content_and_artifact", parse_docstring=True)
-def propose_email_action(
-    email_id: str, kind: ActionKind, reason: str, runtime: ToolRuntime[ProposeActionCtx, NoState]
+def propose_email_actions(
+    kind: ActionKind,
+    reason: str,
+    runtime: ToolRuntime[ProposeActionCtx, NoState],
+    email_ids: list[str] | None = None,
+    gmail_query: str | None = None,
 ) -> tuple[str, StateUpdate | None]:
-    """Suggest an action on one email (it joins the approval queue).
+    """Suggest one action for several emails at once (up to 50), as a single
+    card the user approves. Use it for any request about specific emails
+    ("apaga esses", "arquiva aqueles"), including spam and trash.
 
     Args:
-        email_id: Id from search_mail or list_emails.
         kind: mark_read, star, archive, trash or block_sender.
         reason: Short reason in pt-BR, shown to the user.
+        email_ids: Ids from list_emails, search_mail or an earlier answer.
+        gmail_query: Instead of ids, a Gmail search (e.g. "in:spam from:x@y.com").
     """
     ctx = runtime.context
-    if ctx.lookup.email(email_id) is None:
-        raise ValueError(f"e-mail não encontrado: {email_id}")
-    ref = ctx.actions.propose(email_id, kind, reason, run_id=ctx.run.run_id, trigger="chat")
-    match ref.outcome:
-        case "denied":
-            return f"{kind}: negado pela política do chat", None
-        case "auto":
-            return f"{kind}: aprovado automaticamente pela política; será executado", None
-        case _:
-            assert ref.action_id is not None
-            card = _card(ctx, ActionsDraft(action_ids=(ref.action_id,)))
-            return f"{kind}: sugestão #{ref.action_id} no cartão #{card}; {WAITING}", None
+    action_ids: list[int] = []
+    counts: Counter[str] = Counter()
+    seen: list[EmailRef] = []
+    for email_id in _batch_ids(ctx, email_ids, gmail_query):
+        row = ctx.lookup.ensure(email_id)
+        if row is None:
+            counts["gone"] += 1
+            continue
+        seen.append(EmailRef(email_id=row.id, subject=row.subject, sender=row.sender))
+        ref = ctx.actions.propose(email_id, kind, reason, run_id=ctx.run.run_id, trigger="chat")
+        counts[ref.outcome] += 1
+        if ref.outcome in ("suggested", "duplicate") and ref.action_id is not None:
+            action_ids.append(ref.action_id)
+    notes = [
+        f"{label}: {counts[key]}"
+        for key, label in (("duplicate", "já pendentes"), ("auto", "executados pela política"),
+                           ("denied", "negados pela política"),
+                           ("gone", "não existem mais no Gmail"))
+        if counts[key]
+    ]
+    remember(ctx.refs, ctx.chat.message_id, seen)
+    if not action_ids:
+        raise ValueError("nenhuma sugestão criada; " + "; ".join(notes or ["nenhum e-mail"]))
+    card = _card(ctx, ActionsDraft(action_ids=tuple(action_ids)))
+    return "; ".join(
+        [f"cartão #{card}: {kind} em {len(action_ids)} e-mail(s)", *notes, WAITING]
+    ), None
 
 
 def _canonical_category(taxonomy: TaxonomySource, category: str) -> str:
@@ -248,6 +304,16 @@ def propose_rule(
     )
     if not cond.has_condition():
         raise ValueError("a regra precisa de remetente, domínio, categoria ou assunto")
+    unseen = ""
+    if cond.sender_address:
+        count, close = ctx.rules.known_senders(cond.sender_address)
+        if not count and close:  # likely a typo or an invented spelling
+            raise ValueError(
+                f"nenhum e-mail de {cond.sender_address}; confira o endereço;"
+                f" parecido: {', '.join(close)}"
+            )
+        if not count:
+            unseen = f"; nenhum e-mail de {cond.sender_address} guardado ainda"
     _, affected = ctx.rules.existing(cond, 0)
     card = _card(ctx, RuleDraft(
         name=name.strip()[:120] or "regra do chat",
@@ -259,7 +325,7 @@ def propose_rule(
         unless_document=unless_document,
         affected=affected,
     ))
-    return f"cartão #{card}: regra afeta ~{affected} e-mail(s) já guardados; {WAITING}", None
+    return f"cartão #{card}: regra afeta ~{affected} e-mail(s) já guardados{unseen}; {WAITING}", None
 
 
 @tool(response_format="content_and_artifact", parse_docstring=True)

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.agent.prompts import HistoryTurn
 from src.agent.types import (
+    EmailRef,
     ActionsDraft,
     CardDraft,
     ChatChannel,
@@ -25,6 +26,8 @@ from src.agent.types import (
 )
 from src.chat.audio import WavInfo
 from src.db.models import (
+    LlmCall,
+    ChatMessageRef,
     Attachment,
     AutomationRule,
     ChatAudio,
@@ -40,6 +43,8 @@ from src.llm.types import Schema
 TEXT_MAX = 4000
 TITLE_MAX = 60
 HISTORY_LIMIT = 20
+REFS_MAX = 20  # stored per answer
+REFS_SHOWN = 10  # rendered in the history
 LIVE = ("queued", "running")
 INFO_KINDS = frozenset({"emails", "documents"})
 STATUS_PT = {
@@ -133,6 +138,30 @@ class CardView(Schema):
     items: tuple[CardItemView, ...]
 
 
+class CallFailure(Schema):
+    """One failed model call of an answer (the panel toasts them)."""
+
+    model: str
+    reason: str
+
+
+def failure_reason(kind: str | None, error: str | None) -> str:
+    text = error or ""
+    if "Timeout" in text or "timed out" in text:
+        return "não respondeu a tempo"
+    if "503" in text or "UNAVAILABLE" in text:
+        return "sobrecarregado (503)"
+    if "504" in text or "DEADLINE" in text:
+        return "não respondeu a tempo"
+    if kind == "rate" or "429" in text:
+        return "limite de uso (429)"
+    if kind == "bad_output":
+        return "resposta inválida"
+    if kind == "transient":
+        return "falha de conexão"
+    return "erro"
+
+
 class MessageView(Schema):
     id: int
     conversation_id: int
@@ -146,6 +175,8 @@ class MessageView(Schema):
     run_id: int | None
     created_at: datetime
     cards: tuple[CardView, ...]
+    model: str | None = None
+    failures: tuple[CallFailure, ...] = ()
 
 
 class TurnView(Schema):
@@ -213,6 +244,7 @@ class ChatStore:
         *,
         text: str | None = None,
         audio: tuple[bytes, WavInfo] | None = None,
+        model: str | None = None,
     ) -> TurnView:
         """The user's message plus a queued assistant placeholder."""
         clean = (text or "").strip()[:TEXT_MAX]
@@ -231,6 +263,7 @@ class ChatStore:
                 text="" if audio else clean,
                 input="audio" if audio else "text",
                 status="queued" if audio else "done",
+                model=model,
                 created_at=now,
                 updated_at=now,
             )
@@ -245,6 +278,48 @@ class ChatStore:
                 conv.title = clean[:TITLE_MAX]
             conv.updated_at = now
         return self.turn(assistant_id)
+
+    def start_event_turn(self, conversation_id: int, text: str) -> TurnView | None:
+        """An `[evento]` message plus a queued answer; None when the conversation
+        is busy (the user already moved on)."""
+        now = self._now()
+        with self.sf.begin() as s:
+            conv = s.get(ChatConversation, conversation_id)
+            if conv is None:
+                raise LookupError("conversa não encontrada")
+            if self._busy(s, conversation_id):
+                return None
+            pinned = s.scalar(  # the continuation keeps the model the user chose
+                select(ChatMessage.model)
+                .where(ChatMessage.conversation_id == conversation_id,
+                       ChatMessage.role == "user", ChatMessage.input != "event")
+                .order_by(ChatMessage.id.desc()).limit(1)
+            )
+            event = ChatMessage(conversation_id=conversation_id, role="user",
+                                text=text[:TEXT_MAX], input="event", status="done",
+                                model=pinned, created_at=now, updated_at=now)
+            s.add(event)
+            s.flush()
+            assistant_id = self._placeholder(s, conversation_id, event.id, now)
+            conv.updated_at = now
+        return self.turn(assistant_id)
+
+    def card_conversation(self, card_id: int) -> int | None:
+        with self.sf() as s:
+            return s.scalar(
+                select(ChatMessage.conversation_id)
+                .join(ChatCard, ChatCard.message_id == ChatMessage.id)
+                .where(ChatCard.id == card_id)
+            )
+
+    def card_action_kinds(self, card_id: int) -> tuple[str, ...]:
+        with self.sf() as s:
+            return tuple(s.scalars(
+                select(SuggestedAction.kind)
+                .join(ChatCardItem, ChatCardItem.action_id == SuggestedAction.id)
+                .where(ChatCardItem.card_id == card_id)
+                .order_by(ChatCardItem.position)
+            ))
 
     def _placeholder(self, s: Session, conversation_id: int, user_id: int, now: datetime) -> int:
         bot = ChatMessage(
@@ -341,7 +416,14 @@ class ChatStore:
                 .order_by(ChatMessage.id.desc())
                 .limit(limit)
             ).all()
-            cards = self._cards(s, [m.id for m in rows if m.role == "assistant"])
+            answers = [m.id for m in rows if m.role == "assistant"]
+            cards = self._cards(s, answers)
+            refs: dict[int, list[ChatMessageRef]] = {}
+            for r in s.scalars(
+                select(ChatMessageRef).where(ChatMessageRef.message_id.in_(answers))
+                .order_by(ChatMessageRef.message_id, ChatMessageRef.position)
+            ):
+                refs.setdefault(r.message_id, []).append(r)
         lines: list[HistoryTurn] = []
         for m in reversed(rows):
             text = m.text
@@ -349,12 +431,33 @@ class ChatStore:
                 f"[cartão #{c.id} {self._summary_of(c)}: {STATUS_PT.get(c.status, c.status)}]"
                 for c in cards.get(m.id, ())
             ]
+            if shown := refs.get(m.id, [])[:REFS_SHOWN]:
+                notes.append("[e-mails desta resposta: " + "; ".join(
+                    f"{r.email_id} — {r.subject or '(sem assunto)'} ({r.sender or '-'})"
+                    for r in shown
+                ) + "]")
             if notes:
                 text = "\n".join([text, *notes]) if text else "\n".join(notes)
             if text:
                 lines.append(HistoryTurn(role="user" if m.role == "user" else "assistant",
                                          text=text))
         return lines
+
+    def add_refs(self, message_id: int, refs: Sequence[EmailRef]) -> None:
+        """Remember the emails an answer referenced: first mention wins, at most REFS_MAX."""
+        with self.sf.begin() as s:
+            have = list(s.scalars(
+                select(ChatMessageRef.email_id).where(ChatMessageRef.message_id == message_id)
+            ))
+            for ref in refs:
+                if len(have) >= REFS_MAX:
+                    break
+                if ref.email_id in have:
+                    continue
+                s.add(ChatMessageRef(message_id=message_id, position=len(have),
+                                     email_id=ref.email_id, subject=ref.subject,
+                                     sender=ref.sender))
+                have.append(ref.email_id)
 
     # --- cards ------------------------------------------------------------------
 
@@ -528,12 +631,23 @@ class ChatStore:
                 .where(ChatAudio.message_id.in_([m.id for m in rows]))
             )
         }
+        runs = [m.run_id for m in rows if m.role == "assistant" and m.run_id is not None]
+        failures: dict[int, list[CallFailure]] = {}
+        for c in s.scalars(
+            select(LlmCall).where(LlmCall.agent_run_id.in_(runs), LlmCall.status == "error")
+            .order_by(LlmCall.id)
+        ):
+            if c.agent_run_id is not None:
+                failures.setdefault(c.agent_run_id, []).append(
+                    CallFailure(model=c.model, reason=failure_reason(c.error_kind, c.error))
+                )
         return [
             MessageView(
                 id=m.id, conversation_id=m.conversation_id, role=m.role, text=m.text,
                 input=m.input, status=m.status, progress=m.progress, error=m.error,
                 audio_ms=audio.get(m.id), run_id=m.run_id, created_at=m.created_at,
-                cards=tuple(cards.get(m.id, ())),
+                cards=tuple(cards.get(m.id, ())), model=m.model,
+                failures=tuple(failures.get(m.run_id, ())) if m.run_id is not None else (),
             )
             for m in rows
         ]

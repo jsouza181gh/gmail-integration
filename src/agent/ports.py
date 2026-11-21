@@ -12,8 +12,10 @@ from src.agent.types import (
     CardDraft,
     ChatChannel,
     DocHit,
+    EmailRef,
     LabelInfo,
     MailHit,
+    MailItem,
     MailPage,
     MailQuery,
     PolicyDecision,
@@ -32,6 +34,8 @@ from src.llm.types import CallContext
 @runtime_checkable
 class MailReader(Protocol):
     def list_messages(self, query: MailQuery) -> MailPage: ...
+
+    def item(self, email_id: str) -> MailItem | None: ...
 
     def get_body(self, email_id: str) -> str: ...
 
@@ -98,6 +102,16 @@ class EmailLookup(Protocol):
 
     def body(self, email_id: str) -> str | None: ...
 
+    def remember(self, item: MailItem) -> EmailRow:
+        """Store an email already fetched from Gmail (source='chat') if new."""
+        ...
+
+    def ensure(self, email_id: str) -> EmailRow | None:
+        """The stored email, fetching it from Gmail (spam, trash, old mail)
+        and storing it as source='chat' when unknown; None when Gmail no
+        longer has it."""
+        ...
+
 
 @runtime_checkable
 class DocCatalog(Protocol):
@@ -127,6 +141,13 @@ class RuleReader(Protocol):
     def list(self) -> tuple[RuleRow, ...]: ...
 
     def get(self, rule_id: int) -> RuleRow | None: ...
+
+    def known_senders(self, address: str) -> tuple[int, tuple[str, ...]]: ...
+
+
+@runtime_checkable
+class RefSink(Protocol):
+    def add_refs(self, message_id: int, refs: Sequence[EmailRef]) -> None: ...
 
 
 @runtime_checkable

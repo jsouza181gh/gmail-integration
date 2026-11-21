@@ -15,6 +15,8 @@ from fastapi.responses import StreamingResponse
 from src.agent.types import Verdict
 from src.api.deps import ApiDeps, get_deps, require_user
 from src.chat.audio import MAX_AUDIO_BYTES, parse_wav
+from src.chat.events import card_event
+from src.llm.config import load_chat_config
 from src.chat.store import (
     CardConflict,
     CardView,
@@ -33,6 +35,17 @@ FINAL = frozenset({"done", "failed"})
 
 class TextIn(Schema):
     text: str
+    model: str | None = None  # pin one model of the chat chain; None = the chain
+
+
+class ModelsOut(Schema):
+    models: list[str]
+
+
+def _model(model: str | None) -> str | None:
+    if model is not None and model not in load_chat_config().models:
+        raise ValueError(f"modelo desconhecido: {model}")
+    return model
 
 
 class ConfirmIn(Schema):
@@ -58,6 +71,12 @@ def conversations(request: Request, limit: int = Query(30, ge=1, le=100)) -> lis
     return get_deps(request).chat.conversations(limit)
 
 
+@router.get("/models")
+def models() -> ModelsOut:
+    """The chat's model chain, best first; the panel offers them to pin."""
+    return ModelsOut(models=list(load_chat_config().models))
+
+
 @router.post("/conversations")
 def new_conversation(request: Request) -> ConversationRow:
     return get_deps(request).chat.create_conversation()
@@ -75,13 +94,17 @@ def messages(conversation_id: int, request: Request) -> list[MessageView]:
 def send_text(conversation_id: int, body: TextIn, request: Request) -> TurnView:
     deps = get_deps(request)
     try:
-        return _enqueue(deps, deps.chat.start_turn(conversation_id, text=body.text))
+        return _enqueue(
+            deps, deps.chat.start_turn(conversation_id, text=body.text, model=_model(body.model))
+        )
     except (ChatConflict, LookupError, ValueError) as exc:
         raise _http(exc) from exc
 
 
 @router.post("/conversations/{conversation_id}/audio")
-async def send_audio(conversation_id: int, request: Request) -> TurnView:
+async def send_audio(
+    conversation_id: int, request: Request, model: str | None = Query(None)
+) -> TurnView:
     deps = get_deps(request)
     mime = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
     if mime not in WAV_TYPES:
@@ -95,7 +118,7 @@ async def send_audio(conversation_id: int, request: Request) -> TurnView:
     try:
         info = parse_wav(data)
         turn = await asyncio.to_thread(
-            deps.chat.start_turn, conversation_id, audio=(data, info)
+            deps.chat.start_turn, conversation_id, audio=(data, info), model=_model(model)
         )
     except (ChatConflict, LookupError, ValueError) as exc:
         raise _http(exc) from exc
@@ -157,12 +180,19 @@ def stream(message_id: int, request: Request) -> StreamingResponse:
 
 @router.post("/cards/{card_id}/confirm")
 def confirm(card_id: int, body: ConfirmIn, request: Request) -> CardView:
+    deps = get_deps(request)
     try:
-        return get_deps(request).cards.confirm(
-            card_id, apply_existing=body.apply_existing, verdict=body.verdict
-        )
+        view = deps.cards.confirm(card_id, apply_existing=body.apply_existing, verdict=body.verdict)
     except (CardConflict, LookupError, ValueError) as exc:
         raise _http(exc) from exc
+    # the agent picks the conversation back up (finishes what was asked, or says so)
+    conversation = deps.chat.card_conversation(card_id)
+    if conversation is not None:
+        text = card_event(view, deps.chat.card_action_kinds(card_id))
+        turn = deps.chat.start_event_turn(conversation, text)
+        if turn is not None:
+            _enqueue(deps, turn)
+    return view
 
 
 @router.post("/cards/{card_id}/cancel")

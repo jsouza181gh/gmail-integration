@@ -36,6 +36,7 @@ ChatContextFactory = Callable[[RunScope, ChatScope], AgentContext]
 
 NOT_UNDERSTOOD = "Não entendi o áudio; tente de novo."
 OVERLOADED = "O Gemini está sobrecarregado agora. Tente de novo em instantes."
+NO_QUOTA = "A cota de hoje acabou em todos os modelos do chat; volta às 05h."
 TRUNCATED = "Parei antes de terminar. Pode reformular ou pedir de novo?"
 SUMMARY_MAX = 4000
 
@@ -52,6 +53,8 @@ def _reason(exc: BaseException) -> str:
     match exc:
         case _TurnFailed():
             return str(exc)
+        case LLMExhaustedError() if exc.kinds == ("quota",):
+            return NO_QUOTA
         case LLMExhaustedError():
             return OVERLOADED
         case LLMFatalError():
@@ -124,7 +127,7 @@ class ChatTurnFlow:
         )
         text = user.text
         if user.input == "audio" and not text:
-            text = self._transcribe(message_id, user.id, ctx)
+            text = self._transcribe(message_id, user.id, ctx, user.model)
 
         prompt = build_chat_prompt(
             config,
@@ -133,6 +136,7 @@ class ChatTurnFlow:
             text,
             self._now().date(),
             len(self.approvals.pending()),
+            user.model,
         )
         result = self.loop.run(
             ctx, AgentState(emails={}), prompt, max_turns=CHAT_MAX_TURNS,
@@ -144,13 +148,17 @@ class ChatTurnFlow:
             return "truncated", TRUNCATED
         return "done", result.summary or "Pronto."
 
-    def _transcribe(self, message_id: int, user_id: int, ctx: AgentContext) -> str:
+    def _transcribe(
+        self, message_id: int, user_id: int, ctx: AgentContext, model: str | None
+    ) -> str:
         self.store.progress(message_id, "ouvindo o áudio…")
         audio = self.store.audio(user_id)
         if audio is None:
             raise _TurnFailed(NOT_UNDERSTOOD)
         mime, data = audio
-        prompt = build_transcribe_prompt(mime, data).model_copy(update={"context": ctx.call()})
+        prompt = build_transcribe_prompt(mime, data, model).model_copy(
+            update={"context": ctx.call()}
+        )
         text = self.structured.generate_structured(prompt, Transcript).parsed.text.strip()
         if not text:
             raise _TurnFailed(NOT_UNDERSTOOD)

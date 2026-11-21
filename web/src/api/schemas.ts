@@ -333,12 +333,17 @@ export const ChatCard = z.object({
 })
 export type ChatCard = z.infer<typeof ChatCard>
 
+export const CallFailure = z.object({ model: str, reason: str })
+export type CallFailure = z.infer<typeof CallFailure>
+
+export const ChatModels = z.object({ models: z.array(str) })
+
 export const ChatMessage = z.object({
   id: int,
   conversation_id: int,
   role: z.enum(['user', 'assistant']),
   text: str,
-  input: z.enum(['text', 'audio']),
+  input: z.enum(['text', 'audio', 'event']),
   status: z.enum(['queued', 'running', 'done', 'failed']),
   progress: strN,
   error: strN,
@@ -346,6 +351,8 @@ export const ChatMessage = z.object({
   run_id: int.nullable(),
   created_at: str,
   cards: z.array(ChatCard),
+  model: strN.default(null),
+  failures: z.array(CallFailure).default([]),
 })
 export type ChatMessage = z.infer<typeof ChatMessage>
 

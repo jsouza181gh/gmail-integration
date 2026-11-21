@@ -3,12 +3,15 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
 from src.agent.context import Deps
-from src.agent.ports import MailReader
+from src.agent.ports import EmailLookup, MailReader, RefSink
 from src.agent.state import BodyFetched, StateUpdate
-from src.agent.types import MailQuery
+from src.agent.tools.refs import remember
+from src.agent.types import EmailRef, MailQuery
 from src.llm.types import Schema
 
 MAX_RESULTS_LIMIT = 100
+# in the chat a person waits for the answer: counting uses resultSizeEstimate
+CHAT_LIST_MAX = 25
 
 
 class BodyCtx(Deps):
@@ -22,6 +25,13 @@ class BodyState(Schema):
 
 class MailCtx(Deps):
     mail: MailReader
+
+
+class ListCtx(MailCtx):
+    # chat only: list results are stored and remembered for "esses e-mails"
+    lookup: EmailLookup | None = None
+    refs: RefSink | None = None
+    message_id: int | None = None
 
 
 class NoState(Schema):
@@ -46,7 +56,7 @@ def get_email_body(runtime: ToolRuntime[BodyCtx, BodyState]) -> tuple[str, State
 
 @tool(response_format="content_and_artifact", parse_docstring=True)
 def list_emails(
-    runtime: ToolRuntime[MailCtx, NoState],
+    runtime: ToolRuntime[ListCtx, NoState],
     query: str | None = None,
     label_ids: list[str] | None = None,
     max_results: int = 10,
@@ -68,19 +78,27 @@ def list_emails(
             spaces, OR, - and parentheses.
         label_ids: Label IDs every message must have, e.g. ["INBOX",
             "UNREAD"] or custom IDs from list_labels.
-        max_results: Number of emails to return (1-100). Default 10.
+        max_results: Number of emails to return (1-100; at most 25 in the chat).
+            Default 10. For counts use result_size_estimate, not a big page.
         page_token: nextPageToken from a previous call.
         include_spam_trash: Also search SPAM and TRASH.
     """
+    limit = MAX_RESULTS_LIMIT if runtime.context.message_id is None else CHAT_LIST_MAX
     page = runtime.context.mail.list_messages(
         MailQuery(
             query=query,
             label_ids=tuple(label_ids or ()),
-            max_results=max(1, min(max_results, MAX_RESULTS_LIMIT)),
+            max_results=max(1, min(max_results, limit)),
             page_token=page_token,
             include_spam_trash=include_spam_trash,
         )
     )
+    ctx = runtime.context
+    if ctx.lookup is not None and ctx.message_id is not None:
+        remember(ctx.refs, ctx.message_id, (
+            EmailRef(email_id=ctx.lookup.remember(i).id, subject=i.subject, sender=i.sender)
+            for i in page.items
+        ))
     return _as_data(page.model_dump_json()), None
 
 

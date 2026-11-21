@@ -42,7 +42,7 @@ def main() -> None:
     from src.alerts.service import FailureStreak, build_alert_service
     from src.indexing.wiring import Indexing
     from src.agent.settings import mode_source
-    from src.llm.config import build_gateway, load_llm_config
+    from src.llm.config import build_chat_gateway, build_gateway, load_llm_config
     from src.llm.recorder import DbCallRecorder
 
     # one gateway per process: free-tier pacing is shared by every job kind;
@@ -50,7 +50,10 @@ def main() -> None:
     gateway = build_gateway(
         DbCallRecorder(store.sf), mode_source(store.sf, load_llm_config().mode)
     )
-    agent = Agent(store, jobs, gateway)
+    chat_gateway = build_chat_gateway(
+        DbCallRecorder(store.sf), mode_source(store.sf, load_llm_config().mode)
+    )
+    agent = Agent(store, jobs, gateway, chat_gateway)
     indexing = Indexing(store, jobs, gateway)
     alerts = build_alert_service(store)
     runs = FailureStreak(

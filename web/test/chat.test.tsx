@@ -36,8 +36,11 @@ function chatWith(messages: ChatMessage[]) {
   server.use(
     http.get('/api/chat/conversations', () => json([conversation])),
     http.get('/api/chat/conversations/1/messages', () => json(messages)),
+    http.get('/api/chat/models', () => json({ models: MODELS })),
   )
 }
+
+const MODELS = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite']
 
 test('sends_text_and_renders_streamed_progress_then_answer', async () => {
   chatWith([])
@@ -64,9 +67,15 @@ test('sends_text_and_renders_streamed_progress_then_answer', async () => {
 })
 
 test('rule_card_confirm_with_existing_suggestions', async () => {
-  chatWith([message({}), message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [ruleCard] })])
   let body: unknown
+  const confirmed = { ...ruleCard, status: 'confirmed' as const, apply_existing: true }
+  const card = () => (body === undefined ? ruleCard : confirmed)
+  signedIn()
   server.use(
+    http.get('/api/chat/conversations', () => json([conversation])),
+    http.get('/api/chat/conversations/1/messages', () =>
+      json([message({}), message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [card()] })]),
+    ),
     http.post('/api/chat/cards/11/confirm', async ({ request }) => {
       body = await request.json()
       return json({ ...ruleCard, status: 'confirmed', apply_existing: true })
@@ -134,4 +143,87 @@ test('regras_shows_unless_document', async () => {
   )
   renderApp('/agente?aba=regras')
   expect(await screen.findByText(/exceto com documento/)).toBeInTheDocument()
+})
+
+test('confirm_refetches_and_renders_event_note_and_continuation', async () => {
+  let fetched = 0
+  const before = [message({}), message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [ruleCard] })]
+  const after = [
+    ...before.slice(0, 1),
+    message({ id: 2, role: 'assistant', text: 'Entendi assim — confere?', cards: [{ ...ruleCard, status: 'confirmed' }] }),
+    message({ id: 3, role: 'user', input: 'event', text: "[evento] O usuário confirmou o cartão #11: regra 'lixo' criada (#3)." }),
+    message({ id: 4, role: 'assistant', status: 'queued', text: '' }),
+  ]
+  signedIn()
+  server.use(
+    http.get('/api/chat/conversations', () => json([conversation])),
+    http.get('/api/chat/conversations/1/messages', () => json(fetched++ === 0 ? before : after)),
+    http.post('/api/chat/cards/11/confirm', () => json({ ...ruleCard, status: 'confirmed' })),
+    http.get('/api/chat/messages/4/stream', () =>
+      sse([turn({ id: 4, status: 'done', text: 'Regra criada; agora apago os 5.' }, { id: 3, input: 'event', text: "[evento] O usuário confirmou o cartão #11: regra 'lixo' criada (#3)." })]),
+    ),
+  )
+  const user = userEvent.setup()
+  renderApp('/chat')
+  await user.click(await screen.findByRole('button', { name: 'Confirmar' }))
+  const note = await screen.findByRole('note')
+  expect(note).toHaveTextContent("O usuário confirmou o cartão #11: regra 'lixo' criada (#3).")
+  expect(note).not.toHaveTextContent('[evento]')
+  expect(await screen.findByText('Regra criada; agora apago os 5.')).toBeInTheDocument()
+})
+
+
+test('model_picker_pins_the_model_of_the_turn', async () => {
+  chatWith([])
+  const sent: unknown[] = []
+  server.use(
+    http.post('/api/chat/conversations/1/messages', async ({ request }) => {
+      sent.push(await request.json())
+      return json(turn({ status: 'done', text: 'ok' }, { text: 'oi' }))
+    }),
+  )
+  const user = userEvent.setup()
+  renderApp('/chat')
+  const picker = await screen.findByLabelText('Modelo')
+  await waitFor(() => expect(screen.getByRole('option', { name: 'gemini-3.6-flash' })).toBeInTheDocument())
+  await user.type(screen.getByLabelText('Mensagem'), 'oi{Enter}')
+  await waitFor(() => expect(sent).toEqual([{ text: 'oi' }]))  // automático: no model field
+  await user.selectOptions(picker, 'gemini-3.6-flash')
+  await user.type(screen.getByLabelText('Mensagem'), 'oi{Enter}')
+  await waitFor(() => expect(sent[1]).toEqual({ text: 'oi', model: 'gemini-3.6-flash' }))
+})
+
+test('failed_model_calls_are_toasted_when_the_model_was_pinned', async () => {
+  chatWith([message({ model: 'gemini-3.6-flash' }), message({ id: 2, role: 'assistant', status: 'running', progress: 'pensando…' })])
+  server.use(
+    http.get('/api/chat/messages/2/stream', () =>
+      sse([
+        turn({ status: 'running', failures: [{ model: 'gemini-3.8-flash', reason: 'não respondeu a tempo' }] }, { model: 'gemini-3.6-flash' }),
+        turn({
+          status: 'done',
+          text: 'Pronto.',
+          failures: [
+            { model: 'gemini-3.8-flash', reason: 'não respondeu a tempo' },
+            { model: 'gemini-3.6-flash', reason: 'sobrecarregado (503)' },
+          ],
+        }, { model: 'gemini-3.6-flash' }),
+      ]),
+    ),
+  )
+  renderApp('/chat')
+  expect(await screen.findByText('Pronto.')).toBeInTheDocument()
+  expect(await screen.findByText(/gemini-3\.6-flash: sobrecarregado \(503\)/)).toBeInTheDocument()
+})
+
+
+test('automatic_mode_does_not_toast_failed_calls', async () => {
+  chatWith([message({}), message({ id: 2, role: 'assistant', status: 'running', progress: 'pensando…' })])
+  server.use(
+    http.get('/api/chat/messages/2/stream', () =>
+      sse([turn({ status: 'done', text: 'Pronto.', failures: [{ model: 'gemini-3.8-flash', reason: 'não respondeu a tempo' }] })]),
+    ),
+  )
+  renderApp('/chat')
+  expect(await screen.findByText('Pronto.')).toBeInTheDocument()
+  expect(screen.queryByText(/gemini-3\.8-flash: não respondeu a tempo/)).toBeNull()
 })

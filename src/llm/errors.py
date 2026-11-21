@@ -19,4 +19,4 @@ class LLMExhaustedError(LLMError):
 
 def quota_exhausted(exc: LLMExhaustedError) -> bool:
     """Only rate limits / overload: retrying later (not now) is the fix."""
-    return bool(exc.kinds) and all(k in ("rate", "transient") for k in exc.kinds)
+    return bool(exc.kinds) and all(k in ("rate", "transient", "quota") for k in exc.kinds)

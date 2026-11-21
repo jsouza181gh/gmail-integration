@@ -64,6 +64,9 @@ class EmptyRules:
     def get(self, rule_id: int) -> RuleRow | None:
         return None
 
+    def known_senders(self, address: str) -> tuple[int, tuple[str, ...]]:
+        return 1, ()
+
 
 class SpyStore(ChatStore):
     def __init__(self, sf: sessionmaker[Session]) -> None:
@@ -131,7 +134,7 @@ def test_text_turn_answers_and_records_run(session_factory: sessionmaker[Session
     run = w.trail.run(done.run_id)
     assert (run.trigger, run.status, run.email_id) == ("chat", "done", None)
     prompt = w.caller.prompts[0]
-    assert prompt.purpose == "chat" and prompt.attempts == 3
+    assert prompt.purpose == "chat" and prompt.attempts == 6
     assert prompt.messages[-1].content == "quais boletos tenho?"
 
 
@@ -143,7 +146,7 @@ def test_audio_turn_transcribes_first(session_factory: sessionmaker[Session]) ->
     user = w.store.turn(t.assistant.id).user
     assert (user.text, user.status) == ("tudo da loja pra lixeira", "done")
     (tp,) = w.transcriber.prompts
-    assert tp.purpose == "transcribe" and tp.attempts == 3
+    assert tp.purpose == "transcribe" and tp.attempts == 6
     part = tp.messages[-1].parts[0]
     assert part.mime_type == "audio/wav" and part.data == data
     assert w.caller.prompts[0].messages[-1].content == "tudo da loja pra lixeira"
@@ -230,3 +233,27 @@ def test_missing_config_fails_turn(session_factory: sessionmaker[Session]) -> No
 @pytest.fixture(autouse=True)
 def _quiet_logs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.agent.flows.chat_turn.log", lambda msg: None)
+
+
+def test_chat_turn_quota_reason() -> None:
+    from src.agent.flows.chat_turn import _reason
+    from src.llm.errors import LLMExhaustedError
+
+    assert _reason(LLMExhaustedError("x", kinds=("quota",))) == (
+        "A cota de hoje acabou em todos os modelos do chat; volta às 05h."
+    )
+
+
+def test_chosen_model_pins_the_chat_prompt(session_factory: sessionmaker[Session]) -> None:
+    w = World(session_factory, [turn("Ok.")])
+    t = w.store.start_turn(w.conv, text="oi", model="gemini-3.6-flash")
+    w.handle(t.assistant.id)
+    assert w.caller.prompts[0].models == ("gemini-3.6-flash",)
+
+
+def test_event_turn_keeps_the_chosen_model(session_factory: sessionmaker[Session]) -> None:
+    w = World(session_factory, [turn("Ok."), turn("Feito.")])
+    first = w.store.start_turn(w.conv, text="oi", model="gemini-3.6-flash")
+    w.handle(first.assistant.id)
+    event = w.store.start_event_turn(w.conv, "[evento] x")
+    assert event is not None and event.user.model == "gemini-3.6-flash"

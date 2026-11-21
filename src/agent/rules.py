@@ -1,6 +1,7 @@
 """Automation rules: deterministic conditions -> action, no LLM involved."""
 from collections.abc import Callable
 from datetime import UTC, datetime
+from difflib import get_close_matches
 from email.utils import parseaddr
 
 from sqlalchemy import ColumnElement, false, or_, select, update
@@ -185,6 +186,19 @@ class RuleAdmin:
 
     def existing(self, cond: RuleCondition, limit: int) -> tuple[list[str], int]:
         return RuleEngine(self.sf).existing(cond, limit)
+
+    def known_senders(self, address: str) -> tuple[int, tuple[str, ...]]:
+        """Stored emails from exactly `address`, and up to 3 known addresses
+        that look like it (a typo or an invented spelling)."""
+        target = address.strip().lower()
+        with self.sf() as s:
+            senders = list(s.scalars(select(Email.sender).where(Email.sender.is_not(None)).distinct()))
+        addresses = [parseaddr(x)[1].lower() for x in senders if x]
+        exact = sum(1 for a in addresses if a == target)
+        if exact:
+            return exact, ()
+        close = get_close_matches(target, sorted(set(a for a in addresses if a)), n=3, cutoff=0.8)
+        return 0, tuple(close)
 
     def list(self) -> tuple[RuleRow, ...]:
         with self.sf() as s:

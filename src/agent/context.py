@@ -18,6 +18,7 @@ from src.agent.ports import (
     MailReader,
     PendingReader,
     PolicyReader,
+    RefSink,
     Retriever,
     RuleReader,
     SenderHistorySource,
@@ -69,6 +70,7 @@ class AgentContext(Deps):
     pending: PendingReader
     rules: RuleReader
     cards: CardSink
+    refs: RefSink
 
     def for_step(self, step_id: int) -> Self:
         return self.model_copy(update={"step_id": step_id})

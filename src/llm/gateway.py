@@ -13,7 +13,9 @@ import re
 import threading
 import time
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import (
     AIMessage,
@@ -54,6 +56,18 @@ from src.utils.console import log
 
 # Where langchain-google-genai keeps Gemini 3 function-call thought signatures.
 SIGNATURES_KEY = "__gemini_function_call_thought_signatures__"
+# Gemini's documented stand-in when a function call's signature came from
+# another model: "skip_thought_signature_validator" is its urlsafe-base64
+# spelling; LangChain decodes standard base64, so send the same bytes that way.
+NEUTRAL_SIGNATURE = "skip/thought/signature/validator"
+# After a fallback answers, later calls start there for a while instead of
+# knocking on the overloaded models above it first.
+STICKY_S = 600
+# A model that just timed out / 503'd sits out this long (unless every model
+# of the chain is sitting out).
+COOLDOWN_S = 300
+# Daily quotas reset at midnight Pacific time.
+QUOTA_TZ = ZoneInfo("America/Los_Angeles")
 BACKOFF_BASE_S = 3
 BACKOFF_MAX_S = 120
 # A 429 that asks for a longer wait means the quota (usually the daily one)
@@ -125,7 +139,18 @@ def _retry_delay(exc: BaseException) -> float | None:
 
 
 class _QuotaGone(Exception):
-    """A 429 whose advised wait exceeds RATE_WAIT_MAX_S."""
+    """A 429 for the daily quota, or one whose advised wait exceeds RATE_WAIT_MAX_S."""
+
+    def __init__(self, message: str, until: datetime) -> None:
+        super().__init__(message)
+        self.until = until
+
+
+def next_quota_reset(now: datetime) -> datetime:
+    """The next midnight in America/Los_Angeles, as UTC."""
+    local = now.astimezone(QUOTA_TZ)
+    midnight = datetime.combine(local.date() + timedelta(days=1), datetime.min.time(), QUOTA_TZ)
+    return midnight.astimezone(UTC)
 
 
 def _file_block(part: BinaryPart) -> dict[str, str]:
@@ -142,7 +167,7 @@ def _file_block(part: BinaryPart) -> dict[str, str]:
     }
 
 
-def _to_langchain(msg: ChatMessage) -> BaseMessage:
+def _to_langchain(msg: ChatMessage, model: str | None = None) -> BaseMessage:
     if msg.role == "system":
         return SystemMessage(content=msg.content)
     if msg.role == "human":
@@ -153,10 +178,13 @@ def _to_langchain(msg: ChatMessage) -> BaseMessage:
         return HumanMessage(content=msg.content)
     if msg.role == "tool":
         return ToolMessage(content=msg.content, tool_call_id=msg.tool_call_id or "")
+    sigs = dict(msg.signatures)
+    if sigs and msg.signatures_model is not None and model is not None and msg.signatures_model != model:
+        sigs = {k: NEUTRAL_SIGNATURE for k in sigs}
     return AIMessage(
         content=msg.content,
         tool_calls=[{"id": c.id, "name": c.name, "args": c.args} for c in msg.tool_calls],
-        additional_kwargs={SIGNATURES_KEY: dict(msg.signatures)} if msg.signatures else {},
+        additional_kwargs={SIGNATURES_KEY: sigs} if sigs else {},
     )
 
 
@@ -173,8 +201,14 @@ def _signatures(out: AIMessage) -> dict[str, str]:
     return sigs
 
 
-def _default_chat(model: str) -> ChatModelLike:
-    return ChatGoogleGenerativeAI(model=model, max_retries=0, timeout=90)
+def chat_client_factory(timeout_s: float) -> Callable[[str], ChatModelLike]:
+    def build(model: str) -> ChatModelLike:
+        return ChatGoogleGenerativeAI(model=model, max_retries=0, timeout=timeout_s)
+
+    return build
+
+
+_default_chat = chat_client_factory(90)
 
 
 class GenAIEmbedder:
@@ -228,6 +262,7 @@ class LLMGateway:
         mode_source: Callable[[], Literal["free", "fast"]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wall: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if not models:
             raise ValueError("at least one model is required")
@@ -245,7 +280,47 @@ class LLMGateway:
         self._sleep = sleep
         self._clock = clock
         self._lock = threading.Lock()
-        self._last_call: float | None = None
+        self._last_call: dict[str, float] = {}
+        self._wall = wall
+        # model -> when its daily quota comes back (shared by every lane)
+        self._exhausted: dict[str, datetime] = {}
+        # the model that answered last and until when calls start with it
+        self._sticky: tuple[str, datetime] | None = None
+        # model -> until when it sits out after a transient failure
+        self._cooling: dict[str, datetime] = {}
+
+    def _available(self, models: Sequence[str]) -> tuple[str, ...]:
+        now = self._wall()
+        with self._lock:
+            freed = [m for m, until in self._exhausted.items() if until <= now]
+            for m in freed:
+                del self._exhausted[m]
+            if freed:  # a better model is back: start from the top again
+                self._sticky = None
+            for m in [m for m, until in self._cooling.items() if until <= now]:
+                del self._cooling[m]
+            ok = tuple(m for m in models if m not in self._exhausted)
+            ok = tuple(m for m in ok if m not in self._cooling) or ok
+            if self._sticky is not None:
+                model, until = self._sticky
+                if until <= now or model not in ok:
+                    self._sticky = None
+                else:
+                    start = ok.index(model)
+                    ok = ok[start:] + ok[:start]
+            return ok
+
+    def _stick(self, model: str, chain: Sequence[str]) -> None:
+        with self._lock:
+            self._sticky = (
+                None if model == chain[0]
+                else (model, self._wall() + timedelta(seconds=STICKY_S))
+            )
+
+    def _mark_exhausted(self, model: str, until: datetime) -> None:
+        with self._lock:
+            self._exhausted[model] = until
+        log(f"cota de {model} esgotada até {until.isoformat()}; seguindo sem ele")
 
     def _chat(self, model: str) -> ChatModelLike:
         chats: dict[str, ChatModelLike] | None = getattr(self._local, "chats", None)
@@ -255,34 +330,47 @@ class LLMGateway:
             chats[model] = self._chat_factory(model)
         return chats[model]
 
-    def _pace(self) -> None:
-        """Free mode: reserve the next slot under the lock, then wait for it.
+    def _pace(self, model: str) -> None:
+        """Free mode: reserve the model's next slot under the lock, then wait.
 
-        Several threads (worker lanes) share one gateway, so each caller
-        books its own start time and the RPM holds across all of them.
+        Free-tier limits are per model, so each model has its own spacing;
+        several threads (worker lanes) share one gateway and book slots here.
         """
         mode = self.mode_source() if self.mode_source is not None else self.mode
         with self._lock:
             now = self._clock()
-            if mode != "free" or self._last_call is None:
-                self._last_call = now
+            last = self._last_call.get(model)
+            if mode != "free" or last is None:
+                self._last_call[model] = now
                 return
-            wait = max(0.0, self.min_interval_s - (now - self._last_call))
-            self._last_call = now + wait
+            wait = max(0.0, self.min_interval_s - (now - last))
+            self._last_call[model] = now + wait
         if wait > 0:
             self._sleep(wait)
 
-    def _mark_done(self) -> None:
+    def _mark_done(self, model: str) -> None:
         with self._lock:
             now = self._clock()
-            self._last_call = now if self._last_call is None else max(self._last_call, now)
+            last = self._last_call.get(model)
+            self._last_call[model] = now if last is None else max(last, now)
 
-    def _backoff(self, kind: ErrorKind, exc: BaseException, attempt: int, model: str) -> None:
+    def _backoff(
+        self, kind: ErrorKind, exc: BaseException, attempt: int, model: str, switching: bool
+    ) -> None:
+        """Wait before the next attempt; `switching` = it goes to another model,
+        which has its own limits, so only the quota check applies."""
         exp = min(BACKOFF_BASE_S * 2 ** attempt, BACKOFF_MAX_S)
+        delay = _retry_delay(exc) if kind == "rate" else None
         if kind == "rate":
-            delay = _retry_delay(exc)
+            if "PerDay" in str(exc):
+                raise _QuotaGone(f"cota diária esgotada em {model}",
+                                 next_quota_reset(self._wall())) from exc
             if delay is not None and delay > RATE_WAIT_MAX_S:
-                raise _QuotaGone(f"cota esgotada em {model} (pede {delay:.0f}s)") from exc
+                raise _QuotaGone(f"cota esgotada em {model} (pede {delay:.0f}s)",
+                                 self._wall() + timedelta(seconds=delay)) from exc
+        if switching:
+            return
+        if kind == "rate":
             seconds = (delay if delay is not None else exp) + 1
             why = f"429 em {model}"
         elif kind == "transient":
@@ -313,19 +401,31 @@ class LLMGateway:
 
         `call` gets the attempt's model name; `prompt` is what gets recorded.
         """
-        rotation = tuple(models or self.models)
+        chain = tuple(models or prompt.models or self.models)
         last_exc: BaseException | None = None
         kinds: list[ErrorKind] = []
         budget = min(prompt.attempts or self.max_attempts, self.max_attempts)
+        cycle: set[str] = set()  # models tried since the last back-off
 
         for attempt in range(budget):
-            model = rotation[attempt % len(rotation)]
-            self._pace()
+            rotation = self._available(chain)
+            if not rotation:
+                raise LLMExhaustedError(
+                    f"cota do dia esgotada em todos os modelos: {', '.join(chain)}",
+                    kinds=("quota",),
+                ) from last_exc
+            fresh = [m for m in rotation if m not in cycle]
+            if not fresh:  # every available model failed once: start over
+                cycle.clear()
+                fresh = list(rotation)
+            model = fresh[0]
+            cycle.add(model)
+            self._pace(model)
             started = self._clock()
             try:
                 answer = call(model)
             except (Exception, ValidationError) as exc:  # noqa: BLE001 - classified below
-                self._mark_done()
+                self._mark_done(model)
                 ended = self._clock()
                 last_exc = exc
                 kind = _error_kind(exc)
@@ -346,15 +446,24 @@ class LLMGateway:
                         context=prompt.context,
                     )
                 )
+                with self._lock:
+                    if self._sticky is not None and self._sticky[0] == model:
+                        self._sticky = None  # it stopped answering: back to the top
+                    cools = kind in ("rate", "transient") and len(chain) > 1
+                    if cools:
+                        self._cooling[model] = self._wall() + timedelta(seconds=COOLDOWN_S)
                 if kind == "fatal":
                     raise LLMFatalError(f"erro não recuperável ({model}): {exc}") from exc
+                # back off only when no untried model is left in this cycle
+                switching = any(m not in cycle for m in self._available(chain))
                 try:
-                    self._backoff(kind, exc, attempt, model)
+                    self._backoff(kind, exc, attempt, model, switching)
                 except _QuotaGone as gone:
-                    raise LLMExhaustedError(str(gone), kinds=("rate",)) from exc
+                    self._mark_exhausted(model, gone.until)
                 continue
 
-            self._mark_done()
+            self._stick(model, chain)
+            self._mark_done(model)
             ended = self._clock()
             self._record(
                 CallRecord(
@@ -401,9 +510,8 @@ class LLMGateway:
     def generate_turn(self, prompt: Prompt, tools: Sequence[BaseTool]) -> AssistantTurn:
         """One tool-calling turn. The caller executes the tools and loops."""
 
-        messages = [_to_langchain(m) for m in prompt.messages]
-
         def call(model: str) -> _Answer[AssistantTurn]:
+            messages = [_to_langchain(m, model) for m in prompt.messages]
             out = self._chat(model).bind_tools(tools).invoke(messages)
             if not isinstance(out, AIMessage):
                 raise _BadOutput(

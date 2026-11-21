@@ -13,8 +13,10 @@ from src.agent.types import (
     CardDraft,
     ChatChannel,
     DocHit,
+    EmailRef,
     LabelInfo,
     MailHit,
+    MailItem,
     MailPage,
     MailQuery,
     PolicyDecision,
@@ -91,6 +93,9 @@ class NoMail:
     def list_messages(self, query: MailQuery) -> MailPage:
         raise AssertionError("mail not expected")
 
+    def item(self, email_id: str) -> MailItem | None:
+        raise AssertionError("mail not expected")
+
     def get_body(self, email_id: str) -> str:
         raise AssertionError("mail not expected")
 
@@ -150,6 +155,12 @@ class NoLookup:
     def body(self, email_id: str) -> str | None:
         raise AssertionError("lookup not expected")
 
+    def remember(self, item: MailItem) -> EmailRow:
+        raise AssertionError("lookup not expected")
+
+    def ensure(self, email_id: str) -> EmailRow | None:
+        raise AssertionError("lookup not expected")
+
 
 class NoDocs:
     def find(
@@ -183,10 +194,18 @@ class NoRules:
     def get(self, rule_id: int) -> RuleRow | None:
         raise AssertionError("rules not expected")
 
+    def known_senders(self, address: str) -> tuple[int, tuple[str, ...]]:
+        raise AssertionError("rules not expected")
+
 
 class NoCards:
     def add_card(self, message_id: int, channel: ChatChannel, draft: CardDraft) -> int:
         raise AssertionError("cards not expected")
+
+
+class NoRefs:
+    def add_refs(self, message_id: int, refs: Sequence[EmailRef]) -> None:
+        return None
 
 
 def make_ctx(
@@ -216,6 +235,7 @@ def make_ctx(
         "pending": NoPending(),
         "rules": NoRules(),
         "cards": NoCards(),
+        "refs": NoRefs(),
     }
     fields.update(extra or {})
     fields.update(deps)

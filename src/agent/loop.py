@@ -67,6 +67,7 @@ class AgentLoop:
                     content=turn.content,
                     tool_calls=turn.tool_calls,
                     signatures=turn.signatures,
+                    signatures_model=turn.model or None,
                 )
             )
             for call in turn.tool_calls:

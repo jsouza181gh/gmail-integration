@@ -139,7 +139,7 @@ def list_emails(
     limit: int,
     today: date,
 ) -> EmailPage:
-    stmt: Select[Email] = select(Email)
+    stmt: Select[Email] = select(Email).where(Email.source == "inbox")
     if category is not None:
         stmt = stmt.where(Email.category == category)
     if relevant is not None:
@@ -164,7 +164,7 @@ def list_emails(
 
 def relevant(s: Session, today: date, limit: int = 200) -> list[EmailListItem]:
     rows = list(s.scalars(
-        select(Email).where(Email.is_relevant.is_(True))
+        select(Email).where(Email.is_relevant.is_(True), Email.source == "inbox")
         .order_by(Email.deadline.asc().nulls_last(), Email.received_at.desc().nulls_last())
         .limit(limit)
     ))
