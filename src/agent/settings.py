@@ -11,6 +11,7 @@ from src.db.models import AppSetting, ConfigAudit
 LlmMode = Literal["free", "fast"]
 LLM_MODE = "llm_mode"
 BACKFILL_PAUSED = "backfill_paused"
+BACKFILL_TURBO = "backfill_turbo"
 Channel = Literal["ui", "cli", "chat"]
 
 
@@ -70,6 +71,43 @@ class RuntimeSettings:
                     s.delete(row)
             audit(s, "settings", BACKFILL_PAUSED, channel,
                   "pausado" if before else "rodando", "pausado" if paused else "rodando", now)
+
+    def backfill_turbo(self) -> bool:
+        with self.sf() as s:
+            row = s.get(AppSetting, BACKFILL_TURBO)
+            return row is not None and row.value == "1"
+
+    def set_backfill_turbo(self, on: bool, channel: Channel = "ui") -> None:
+        """On: the backfill also uses the app key while it is not under pressure."""
+        now = self._now()
+        with self.sf.begin() as s:
+            row = s.get(AppSetting, BACKFILL_TURBO)
+            before = row is not None and row.value == "1"
+            if on:
+                s.merge(AppSetting(key=BACKFILL_TURBO, value="1", updated_at=now))
+            elif row is not None:
+                s.delete(row)
+            audit(s, "settings", BACKFILL_TURBO, channel,
+                  "ligado" if before else "desligado", "ligado" if on else "desligado", now)
+
+
+def turbo_source(
+    session_factory: sessionmaker[Session], ttl_s: float = 30.0,
+    clock: Callable[[], float] = time.monotonic,
+) -> Callable[[], bool]:
+    """Reads backfill_turbo for the backfill's LLM, cached for ttl_s."""
+    settings = RuntimeSettings(session_factory)
+    cache: list[tuple[float, bool]] = []
+
+    def read() -> bool:
+        now = clock()
+        if cache and now - cache[0][0] < ttl_s:
+            return cache[0][1]
+        value = settings.backfill_turbo()
+        cache[:] = [(now, value)]
+        return value
+
+    return read
 
 
 def mode_source(

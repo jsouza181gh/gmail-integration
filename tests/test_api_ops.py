@@ -159,3 +159,15 @@ def test_backfill_resume_restarts_a_dead_chain(api: Api) -> None:
     assert api.client.post("/api/backfill/resume").status_code == 200
     with api.sf() as s:
         assert s.scalar(select(func.count()).select_from(Job).where(Job.kind == "backfill_page")) == 1
+
+
+def test_backfill_turbo_toggle(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
+    c = api.client
+    monkeypatch.delenv("GOOGLE_API_KEY_BACKFILL", raising=False)
+    status = c.get("/api/backfill").json()
+    assert status["turbo"] is False and status["turbo_available"] is False
+    monkeypatch.setenv("GOOGLE_API_KEY", "app-key")
+    monkeypatch.setenv("GOOGLE_API_KEY_BACKFILL", "bf-key")
+    on = c.post("/api/backfill/turbo", json={"on": True})
+    assert on.status_code == 200 and on.json()["turbo"] is True and on.json()["turbo_available"] is True
+    assert c.post("/api/backfill/turbo", json={"on": False}).json()["turbo"] is False

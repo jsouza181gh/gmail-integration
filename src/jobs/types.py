@@ -8,7 +8,7 @@ from src.llm.types import Schema
 
 JobKind = Literal[
     "chat_turn", "process_email", "execute_action", "index_email", "index_attachment",
-    "backfill_page",
+    "backfill_page", "backfill_attachment",
 ]
 JobStatus = Literal["queued", "running", "done", "dead"]
 
@@ -21,6 +21,7 @@ PRIORITY: dict[JobKind, int] = {
     "execute_action": 20,
     "index_email": 10,
     "index_attachment": 5,
+    "backfill_attachment": 1,
     "backfill_page": 0,
 }
 
@@ -50,6 +51,14 @@ class IndexAttachmentJob(Schema):
     attachment_id: int
 
 
+class BackfillAttachmentJob(Schema):
+    """An attachment found by the history backfill: runs in the backfill lane,
+    on the backfill API key (index_attachment is for new mail)."""
+
+    kind: Literal["backfill_attachment"] = "backfill_attachment"
+    attachment_id: int
+
+
 class BackfillPageJob(Schema):
     kind: Literal["backfill_page"] = "backfill_page"
     run_id: int
@@ -58,11 +67,11 @@ class BackfillPageJob(Schema):
 
 type AnyJob = (
     ChatTurnJob | ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob
-    | BackfillPageJob
+    | BackfillAttachmentJob | BackfillPageJob
 )
 JobPayload = Annotated[
     ChatTurnJob | ProcessEmailJob | ExecuteActionJob | IndexEmailJob | IndexAttachmentJob
-    | BackfillPageJob,
+    | BackfillAttachmentJob | BackfillPageJob,
     Field(discriminator="kind"),
 ]
 
@@ -75,8 +84,8 @@ def idempotency_key(payload: AnyJob) -> str:
             return f"{payload.kind}:{e}"
         case ExecuteActionJob(action_id=a):
             return f"execute_action:{a}"
-        case IndexAttachmentJob(attachment_id=a):
-            return f"index_attachment:{a}"
+        case IndexAttachmentJob(attachment_id=a) | BackfillAttachmentJob(attachment_id=a):
+            return f"{payload.kind}:{a}"
         case BackfillPageJob(run_id=r, page_no=n):
             return f"backfill_page:{r}:{n}"
 

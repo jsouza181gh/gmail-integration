@@ -11,7 +11,7 @@ from googleapiclient.discovery import Resource
 from src.gmail.full import AttachmentRef, fetch_full
 from src.indexing.store import EmailText, IndexStore, NewAttachment
 from src.jobs.store import JobStore
-from src.jobs.types import ClaimedJob, IndexAttachmentJob, IndexEmailJob
+from src.jobs.types import BackfillAttachmentJob, ClaimedJob, IndexAttachmentJob, IndexEmailJob
 from src.jobs.worker import Deferred
 from src.llm.errors import LLMExhaustedError, quota_exhausted
 from src.llm.types import CallContext, Embedder, EmbedInput, Schema
@@ -105,7 +105,14 @@ class Indexer:
                     continue
                 atts = [NewAttachment(ref=a, skip_reason=candidate(a)) for a in full.attachments]
                 pending = self.store.save_indexed(full, atts, run_id)
-                enqueued = sum(self.jobs.enqueue(IndexAttachmentJob(attachment_id=a)) for a in pending)
+                # history attachments go to the backfill lane/key, new mail's to the app's
+                enqueued = sum(
+                    self.jobs.enqueue(
+                        BackfillAttachmentJob(attachment_id=a) if run_id is not None
+                        else IndexAttachmentJob(attachment_id=a)
+                    )
+                    for a in pending
+                )
                 out = out.model_copy(update={
                     "indexed": out.indexed + 1,
                     "attachments_enqueued": out.attachments_enqueued + enqueued,

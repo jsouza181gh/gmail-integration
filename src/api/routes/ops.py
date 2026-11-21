@@ -14,6 +14,7 @@ from src.db.models import AgentRun, Job, LlmCall
 from src.db.rows import AgentStepRow
 from src.indexing.backfill import PAGE_SIZE, PAUSED_REASON, RUN_QUERY, BackfillProgress
 from src.jobs.types import BackfillPageJob, DeadJob, JobCounts
+from src.llm.config import load_keys
 from src.llm.types import Schema
 from src.utils.console import log
 
@@ -30,6 +31,12 @@ class BackfillStatus(Schema):
     eta_hours: float | None
     deferred_until: datetime | None
     paused: bool  # paused by the user (deferred_until is the quota wait)
+    turbo: bool  # the backfill also uses the app key while it is idle
+    turbo_available: bool  # a separate GOOGLE_API_KEY_BACKFILL is set
+
+
+class TurboIn(Schema):
+    on: bool
 
 
 class LlmCallOut(Schema):
@@ -151,6 +158,8 @@ def _status(deps: ApiDeps) -> BackfillStatus:
         pages_last_hour=hour, pages_last_day=day, eta_hours=eta,
         deferred_until=next_at if next_at is not None and next_at > now else None,
         paused=RuntimeSettings(deps.sf).backfill_paused(),
+        turbo=RuntimeSettings(deps.sf).backfill_turbo(),
+        turbo_available=load_keys().separate,
     )
 
 
@@ -176,6 +185,14 @@ def backfill_start(request: Request) -> BackfillStatus:
 def backfill_pause(request: Request) -> BackfillStatus:
     deps = get_deps(request)
     RuntimeSettings(deps.sf, deps.clock).set_backfill_paused(True)
+    return _status(deps)
+
+
+@router.post("/backfill/turbo")
+def backfill_turbo(body: TurboIn, request: Request) -> BackfillStatus:
+    """Turbo: the backfill also uses the app key, but never while the app needs it."""
+    deps = get_deps(request)
+    RuntimeSettings(deps.sf, deps.clock).set_backfill_turbo(body.on)
     return _status(deps)
 
 

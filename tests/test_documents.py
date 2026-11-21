@@ -295,3 +295,13 @@ def test_fatal_on_text_still_raises(session_factory: sessionmaker[Session]) -> N
     llm = FakeLLM([LLMFatalError("401 key")])
     with pytest.raises(LLMFatalError):
         DocumentIndexer(IndexStore(session_factory), llm, lambda: svc, max_attempts=5).handle(job(att_id))
+
+
+def test_backfill_attachment_job_is_analyzed(session_factory: sessionmaker[Session]) -> None:
+    from src.jobs.types import BackfillAttachmentJob
+
+    svc, att_id = setup(session_factory, text_pdf(LONG))
+    DocumentIndexer(IndexStore(session_factory), FakeLLM([analysis()]), lambda: svc,
+                    max_attempts=5).handle(
+        ClaimedJob(id=1, attempts=1, payload=BackfillAttachmentJob(attachment_id=att_id)))
+    assert row(session_factory, att_id).status == "done"

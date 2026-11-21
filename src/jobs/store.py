@@ -15,6 +15,7 @@ from src.db.models import Job
 from src.jobs.types import (
     PRIORITY,
     AnyJob,
+    BackfillAttachmentJob,
     BackfillPageJob,
     ChatTurnJob,
     ClaimedJob,
@@ -48,6 +49,8 @@ def _payload(job: Job) -> AnyJob:
         return IndexEmailJob(email_id=job.email_id)
     if job.kind == "index_attachment" and job.attachment_id is not None:
         return IndexAttachmentJob(attachment_id=job.attachment_id)
+    if job.kind == "backfill_attachment" and job.attachment_id is not None:
+        return BackfillAttachmentJob(attachment_id=job.attachment_id)
     if job.kind == "backfill_page" and job.run_id is not None and job.page_no is not None:
         return BackfillPageJob(run_id=job.run_id, page_no=job.page_no)
     raise ValueError(f"job {job.id}: kind/payload inconsistentes ({job.kind})")
@@ -66,7 +69,7 @@ def _columns(payload: AnyJob) -> dict[str, str | int | None]:
             cols["email_id"] = e
         case ExecuteActionJob(action_id=a):
             cols["action_id"] = a
-        case IndexAttachmentJob(attachment_id=a):
+        case IndexAttachmentJob(attachment_id=a) | BackfillAttachmentJob(attachment_id=a):
             cols["attachment_id"] = a
         case BackfillPageJob(run_id=r, page_no=n):
             cols["run_id"], cols["page_no"] = r, n

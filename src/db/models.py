@@ -399,6 +399,10 @@ class Job(Base):
             name="ck_jobs_index_attachment_has_attachment",
         ),
         CheckConstraint(
+            "kind <> 'backfill_attachment' OR attachment_id IS NOT NULL",
+            name="ck_jobs_backfill_attachment_has_attachment",
+        ),
+        CheckConstraint(
             "kind <> 'backfill_page' OR (run_id IS NOT NULL AND page_no IS NOT NULL)",
             name="ck_jobs_backfill_page_has_page",
         ),

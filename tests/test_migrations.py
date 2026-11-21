@@ -133,3 +133,19 @@ def test_migration_0016_activates_v2_and_rolls_back(
     with create_engine(url).connect() as c:
         rows = c.execute(text("select version, active from agent_configs")).all()
     assert [tuple(r) for r in rows] == [(1, True)]
+
+
+def test_migration_0018_backfill_attachment_constraint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    cfg, url = _upgraded(tmp_path, monkeypatch)
+    eng = create_engine(url)
+    with pytest.raises(IntegrityError), eng.begin() as c:
+        c.execute(text(
+            "insert into jobs (kind, priority, status, attempts, max_attempts, run_after,"
+            " idempotency_key, created_at) values ('backfill_attachment', 1, 'queued', 0, 5,"
+            " '2026-11-21', 'k', '2026-11-21')"
+        ))
+    command.downgrade(cfg, "0017")
