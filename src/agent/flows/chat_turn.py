@@ -25,6 +25,7 @@ from src.agent.prompts import (
 from src.agent.state import AgentState
 from src.agent.trail import RunStatus, Trail
 from src.agent.types import ChatChannel
+from src.chat.batches import done_summary
 from src.chat.store import ChatStore
 from src.db.rows import AgentConfigRow
 from src.jobs.types import ChatTurnJob, ClaimedJob
@@ -146,7 +147,11 @@ class ChatTurnFlow:
         )
         if result.status == "truncated":
             return "truncated", TRUNCATED
-        return "done", result.summary or "Pronto."
+        answer = result.summary or "Pronto."
+        # a finished batch: the real numbers open the answer, whatever the model says
+        if user.input == "event" and (summary := done_summary(user.text)) is not None:
+            answer = f"{summary}\n\n{answer}"
+        return "done", answer
 
     def _transcribe(
         self, message_id: int, user_id: int, ctx: AgentContext, model: str | None

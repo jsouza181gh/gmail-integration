@@ -193,8 +193,8 @@ def test_continuation_waits_for_the_card_and_reports_results(
     done = store.turn(turn.assistant.id)
     assert done.assistant.progress is None and done.assistant.status == "queued"
     assert done.user.text == (
-        f"[evento] Lote do cartão #{card} (trash) concluído: 2 executada(s), 1 falhou"
-        " (404 not found). Lote 1 de 3; restam ~70 na busca 'in:spam'."
+        f"[evento] Lote 1 de 3 concluído (cartão #{card}): 2 e-mail(s) apagado(s), 1 falhou"
+        " (404 not found). Restam ~70 na busca 'in:spam'."
     )
     assert store.settle_card(card) is None  # already released
 
@@ -210,5 +210,5 @@ def test_settle_releases_at_once_when_everything_already_ran(
     turn = store.start_event_turn(conv, "[evento] aprovou", wait_card_id=card)
     assert turn is not None and store.settle_card(card) == turn.assistant.id
     assert store.turn(turn.assistant.id).user.text == (
-        f"[evento] Lote do cartão #{card} (trash) concluído: 2 executada(s)."
+        f"[evento] Cartão #{card} concluído: 2 e-mail(s) apagado(s)."
     )

@@ -110,7 +110,7 @@ def test_spam_cleanup_conversation(session_factory: sessionmaker[Session]) -> No
         api.deps.approvals.mark_executed(item.action_id)
         waiter.on_action_settled(item.action_id)
     msgs = store.messages(conv)
-    assert msgs[-2].text == f"[evento] Lote do cartão #{actions_card.id} (trash) concluído: 5 executada(s)."
+    assert msgs[-2].text == f"[evento] Cartão #{actions_card.id} concluído: 5 e-mail(s) apagado(s)."
     with sf() as s:
         last = s.scalars(select(Job).order_by(Job.id.desc())).first()
     assert last is not None and (last.kind, last.chat_message_id) == ("chat_turn", msgs[-1].id)
