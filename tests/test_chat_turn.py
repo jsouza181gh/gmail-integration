@@ -260,7 +260,7 @@ def test_event_turn_keeps_the_chosen_model(session_factory: sessionmaker[Session
 
 
 def test_batch_result_opens_the_answer(session_factory: sessionmaker[Session]) -> None:
-    w = World(session_factory, [turn("Quer apagar o lote 2 de 5?")])
+    w = World(session_factory, [])  # no model call: the reply is built from the facts
     first = w.store.start_turn(w.conv, text="apaga o spam")
     w.store.begin(first.assistant.id)
     w.store.finish(first.assistant.id, "Lote 1 de 5.")
@@ -271,7 +271,7 @@ def test_batch_result_opens_the_answer(session_factory: sessionmaker[Session]) -
     w.handle(event.assistant.id)
     assert w.store.turn(event.assistant.id).assistant.text == (
         "Lote 1 de 5 concluído (cartão #3): 49 e-mail(s) apagado(s), 1 falhou (404)."
-        " Restam ~151 na busca 'in:spam'.\n\nQuer apagar o lote 2 de 5?"
+        " Restam ~151 na busca 'in:spam'.\n\nQuer que eu prepare o lote 2 de 5?"
     )
 
 

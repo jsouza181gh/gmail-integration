@@ -11,6 +11,8 @@ import math
 import random
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -269,6 +271,7 @@ class LLMGateway:
         embedder: EmbedderLike | None = None,
         mode_source: Callable[[], Literal["free", "fast"]] | None = None,
         api_key: str | None = None,
+        call_timeout_s: float | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -291,6 +294,13 @@ class LLMGateway:
         self._lock = threading.Lock()
         self._last_call: dict[str, float] = {}
         self._wall = wall
+        # Wall-clock cap per attempt: the SDK timeout only bounds the gap
+        # between bytes, so a slow model could hold a chat answer for minutes.
+        self._call_timeout_s = call_timeout_s
+        self._pool = (
+            ThreadPoolExecutor(max_workers=8, thread_name_prefix="llm-call")
+            if call_timeout_s is not None else None
+        )
         # model -> when its daily quota comes back (shared by every lane)
         self._exhausted: dict[str, datetime] = {}
         # the model that answered last and until when calls start with it
@@ -318,6 +328,18 @@ class LLMGateway:
                     start = ok.index(model)
                     ok = ok[start:] + ok[:start]
             return ok
+
+    def _timed[R](self, call: Callable[[str], _Answer[R]], model: str) -> _Answer[R]:
+        if self._pool is None or self._call_timeout_s is None:
+            return call(model)
+        future = self._pool.submit(call, model)
+        try:
+            return future.result(timeout=self._call_timeout_s)
+        except FutureTimeout:
+            # the attempt is abandoned (its thread finishes on its own)
+            raise TimeoutError(
+                f"ReadTimeout: {model} sem resposta em {self._call_timeout_s:.0f}s"
+            ) from None
 
     def under_pressure(self) -> bool:
         """Some model of the chain is paused (503/timeout) or out of its daily
@@ -441,7 +463,7 @@ class LLMGateway:
             self._pace(model)
             started = self._clock()
             try:
-                answer = call(model)
+                answer = self._timed(call, model)
             except (Exception, ValidationError) as exc:  # noqa: BLE001 - classified below
                 self._mark_done(model)
                 ended = self._clock()

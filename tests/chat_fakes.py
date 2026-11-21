@@ -38,9 +38,11 @@ class SpamMail:
     def __init__(self, items: Sequence[MailItem] = ()) -> None:
         self.items = {i.id: i for i in items}
         self.queries: list[MailQuery] = []
+        self.fetched: list[str] = []
         self.page_size = 100
 
     def item(self, email_id: str) -> MailItem | None:
+        self.fetched.append(email_id)
         return self.items.get(email_id)
 
     def list_messages(self, query: MailQuery) -> MailPage:

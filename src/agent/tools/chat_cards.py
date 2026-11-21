@@ -36,6 +36,7 @@ from src.agent.types import (
     EmailRef,
     EmailsDraft,
     KbScopeName,
+    MailItem,
     MailQuery,
     PolicyDecision,
     PolicyDraft,
@@ -195,28 +196,32 @@ def decide_pending(
     return f"cartão #{card}: {word} {len(rows)} sugestão(ões); {WAITING}", None
 
 
-def _batch_ids(ctx: ProposeActionCtx, email_ids: list[str] | None,
-               gmail_query: str | None) -> tuple[list[str], int | None]:
-    """The ids of this batch and, for a search, Gmail's estimate of its size."""
+def _batch_ids(
+    ctx: ProposeActionCtx, email_ids: list[str] | None, gmail_query: str | None
+) -> tuple[list[tuple[str, MailItem | None]], int | None]:
+    """The batch (id, and the item when a search already fetched it) and, for a
+    search, Gmail's estimate of its size."""
     if (email_ids is None) == (gmail_query is None):
         raise ValueError("informe email_ids ou gmail_query (só um dos dois)")
     if email_ids is not None:
-        return list(dict.fromkeys(email_ids))[:BATCH_MAX], None
-    ids: list[str] = []
+        return [(i, None) for i in list(dict.fromkeys(email_ids))[:BATCH_MAX]], None
+    items: dict[str, MailItem] = {}
     estimate: int | None = None
     token: str | None = None
-    while len(ids) < BATCH_MAX:
+    while len(items) < BATCH_MAX:
         page = ctx.mail.list_messages(MailQuery(
-            query=gmail_query, max_results=BATCH_MAX - len(ids), page_token=token,
+            query=gmail_query, max_results=BATCH_MAX - len(items), page_token=token,
             include_spam_trash=True,
         ))
         if estimate is None:
             estimate = page.result_size_estimate
-        ids += [i.id for i in page.items if i.id not in ids]
+        for item in page.items:
+            items.setdefault(item.id, item)
         token = page.next_page_token
         if token is None or not page.items:
             break
-    return ids[:BATCH_MAX], estimate
+    found: list[tuple[str, MailItem | None]] = list(items.items())
+    return found[:BATCH_MAX], estimate
 
 
 @tool(response_format="content_and_artifact", parse_docstring=True)
@@ -241,9 +246,9 @@ def propose_email_actions(
     action_ids: list[int] = []
     counts: Counter[str] = Counter()
     seen: list[EmailRef] = []
-    batch_ids, estimate = _batch_ids(ctx, email_ids, gmail_query)
-    for email_id in batch_ids:
-        row = ctx.lookup.ensure(email_id)
+    entries, estimate = _batch_ids(ctx, email_ids, gmail_query)
+    for email_id, item in entries:
+        row = ctx.lookup.remember(item) if item is not None else ctx.lookup.ensure(email_id)
         if row is None:
             counts["gone"] += 1
             continue

@@ -350,6 +350,13 @@ def test_batch_by_query_records_batch_metadata(w: ChatWorld) -> None:
     assert first.ok and "lote 1 de 3 (50 de ~120 e-mails da busca 'in:spam')" in first.message.content
     (card,) = w.store.turn(w.message_id).assistant.cards
     assert (card.batch_no, card.batch_total, card.batch_query) == (1, 120, "in:spam")
+    assert w.mail.fetched == []  # the search already brought them: no Gmail call per id
+    again = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
+                                            "gmail_query": "in:spam"})
+    assert "lote 1 de 3" in again.message.content  # card 1 not confirmed: still batch 1
+    with w.sf.begin() as s:
+        from src.db.models import ChatCard
+        s.get_one(ChatCard, card.id).status = "confirmed"
     second = w.run("propose_email_actions", {"kind": "trash", "reason": "spam",
                                              "gmail_query": "in:spam"})
     assert "lote 2 de 3" in second.message.content

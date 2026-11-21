@@ -516,13 +516,14 @@ class ChatStore:
     # --- cards ------------------------------------------------------------------
 
     def batch_count(self, message_id: int, query: str, action: str) -> int:
-        """Actions cards of this conversation already proposed for `query`."""
+        """Confirmed actions cards of this conversation for `query` (batches done)."""
         with self.sf() as s:
             conv = s.scalar(select(ChatMessage.conversation_id).where(ChatMessage.id == message_id))
             return s.scalar(
                 select(func.count()).select_from(ChatCard)
                 .join(ChatMessage, ChatMessage.id == ChatCard.message_id)
                 .where(ChatMessage.conversation_id == conv, ChatCard.kind == "actions",
+                       ChatCard.status == "confirmed",
                        ChatCard.batch_query == query, ChatCard.action == action)
             ) or 0
 

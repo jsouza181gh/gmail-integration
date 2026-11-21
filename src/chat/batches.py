@@ -47,3 +47,21 @@ def done_summary(event_text: str) -> str | None:
     if not DONE_EVENT.match(event_text):
         return None
     return event_text.removeprefix(EVENT)
+
+
+BATCH_OF = re.compile(r"Lote (\d+) de (\d+) concluído")
+
+
+def done_reply(event_text: str) -> str | None:
+    """The whole answer to a finished card, from facts only (no model call):
+    the result, then the offer of the next batch or the end of the batches."""
+    summary = done_summary(event_text)
+    if summary is None:
+        return None
+    batch = BATCH_OF.search(summary)
+    if batch is None:
+        return summary
+    number, batches = int(batch.group(1)), int(batch.group(2))
+    if "Restam ~" in summary and number < batches:
+        return f"{summary}\n\nQuer que eu prepare o lote {number + 1} de {batches}?"
+    return f"{summary}\n\nTodos os lotes foram executados."

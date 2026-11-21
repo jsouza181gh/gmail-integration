@@ -111,4 +111,5 @@ def build_chat_gateway(
         mode_source=mode_source,
         recorder=recorder,
         chat_factory=chat_client_factory(CHAT_TIMEOUT_S, key or load_keys().app or None),
+        call_timeout_s=CHAT_TIMEOUT_S,
     )
