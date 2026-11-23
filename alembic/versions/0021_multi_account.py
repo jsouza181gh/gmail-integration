@@ -39,6 +39,14 @@ EMAIL_REFS = (
 # Primary keys that gain the account: emails(id), email_embeddings(email_id)
 REKEYED = (("emails", "id"), ("email_embeddings", "email_id"))
 TEMPLATE_EMAIL = "template@invalid"
+# Row-level security (Postgres). Superusers bypass RLS even when forced, so the
+# app's sessions switch to this NOLOGIN role (src.db.scope: SET LOCAL ROLE).
+APP_ROLE = "gi_app"
+POLICY = (
+    "gmail_account_id = NULLIF(current_setting('app.account_id', true), '')::int"
+    " OR current_setting('app.system', true) = 'on'"
+)
+RLS_TABLES = (*OWNED, "gmail_labels", "account_settings")
 LIVE = sa.text("status IN ('pending', 'approved')")
 # (table, old unique columns, new constraint name)
 UNIQUES = (
@@ -125,6 +133,7 @@ def upgrade() -> None:
         ),
     )
     _move_settings_and_watch_state()
+    _enable_rls()
 
 
 def _email_keys(composite: bool) -> None:
@@ -200,9 +209,6 @@ def _restore_settings_and_watch_state() -> None:
         ),
     )
     conn = op.get_bind()
-    count = conn.execute(sa.text("SELECT count(*) FROM gmail_accounts")).scalar() or 0
-    if count > 1:
-        raise RuntimeError(f"downgrade de 0021 só com uma conta (há {count})")
     acc = conn.execute(sa.text(
         "SELECT id, email_address, history_id, watch_expiration FROM gmail_accounts"
         " WHERE status <> 'template' AND history_id IS NOT NULL"
@@ -265,7 +271,50 @@ def _create_first_account() -> None:
     )
 
 
+def _enable_rls() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return
+    # gmail_accounts got an explicit id 1: move its sequence past it
+    op.execute("SELECT setval(pg_get_serial_sequence('gmail_accounts', 'id'),"
+               " GREATEST((SELECT max(id) FROM gmail_accounts), 1))")
+    op.execute(f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{APP_ROLE}')"
+               f" THEN CREATE ROLE {APP_ROLE} NOLOGIN; END IF; END $$")
+    op.execute(f"GRANT {APP_ROLE} TO CURRENT_USER")
+    op.execute(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}")
+    op.execute(f"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}")
+    op.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public"
+               f" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {APP_ROLE}")
+    op.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public"
+               f" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {APP_ROLE}")
+    for table in RLS_TABLES:
+        op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+        op.execute(f"CREATE POLICY account_isolation ON {table} USING ({POLICY})"
+                   f" WITH CHECK ({POLICY})")
+
+
+def _disable_rls() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return
+    for table in RLS_TABLES:
+        op.execute(f"DROP POLICY IF EXISTS account_isolation ON {table}")
+        op.execute(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
+    op.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public"
+               f" REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM {APP_ROLE}")
+    op.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public"
+               f" REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM {APP_ROLE}")
+    op.execute(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {APP_ROLE}")
+    op.execute(f"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {APP_ROLE}")
+    op.execute(f"REVOKE USAGE ON SCHEMA public FROM {APP_ROLE}")
+
+
 def downgrade() -> None:
+    count = op.get_bind().execute(sa.text("SELECT count(*) FROM gmail_accounts")).scalar() or 0
+    if count > 1:
+        raise RuntimeError(f"downgrade de 0021 só com uma conta (há {count})")
+    _disable_rls()
     _restore_settings_and_watch_state()
     op.drop_table("account_settings")
 

@@ -32,6 +32,8 @@ type Scope = int | Literal["system"] | None
 
 _scope: ContextVar[Scope] = ContextVar("account_scope", default=None)
 
+APP_ROLE = "gi_app"  # Postgres role the row-level security policies bind (see 0021)
+
 
 class ScopeError(RuntimeError):
     pass
@@ -113,6 +115,9 @@ def install_scoping(sf: sessionmaker[Session]) -> None:
     def _pg_settings(session: Session, _tx: SessionTransaction, conn: Connection) -> None:
         if conn.dialect.name != "postgresql":
             return
+        # the owner/superuser bypasses RLS: every app session runs as the
+        # NOLOGIN role the policies apply to (created by migration 0021)
+        conn.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
         scope = _scope.get()
         if scope == "system":
             conn.execute(text("SELECT set_config('app.system', 'on', true)"))
