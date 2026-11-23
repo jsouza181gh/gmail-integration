@@ -211,6 +211,11 @@ class JobStore:
             )
             return bool(result.rowcount) if isinstance(result, CursorResult) else False
 
+    def exists(self, job_id: int) -> bool:
+        """In the current account (another account's job does not exist here)."""
+        with self.sf() as s:
+            return s.get(Job, job_id) is not None
+
     def dead(self, limit: int, kind: str | None = None) -> list[DeadJob]:
         q = select(Job).where(Job.status == "dead").order_by(Job.id.desc()).limit(limit)
         if kind is not None:
