@@ -3,6 +3,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.agent.actions import ActionService
 from src.agent.approvals import ApprovalService
 from src.agent.context import ChatScope
@@ -263,7 +264,7 @@ def test_ensure_fetches_and_stores_unknown_id(w: ChatWorld) -> None:
     assert row is not None and row.source == "chat"
     assert row.sender == "Google Alerts <googlealerts-noreply@google.com>"
     with w.sf() as s:
-        stored = s.get(Email, "sp1")
+        stored = s.get(Email, email_key("sp1"))
         assert stored is not None and stored.source == "chat" and stored.received_at is not None
 
 

@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.classification.taxonomy import Classification
 from src.db.models import AgentRun, Email, Job, Run, SuggestedAction
 from src.db.rows import EmailRow
@@ -154,7 +155,7 @@ def test_unanswered_emails_are_retried_then_given_up(session_factory: sessionmak
     w.drain()
     assert w.classifier.calls[0] == ["a", "b"] and all(c == ["b"] for c in w.classifier.calls[1:])
     with session_factory() as s:
-        assert s.get_one(Email, "b").category == "Não classificado"
+        assert s.get_one(Email, email_key("b")).category == "Não classificado"
 
 
 def test_quota_defers_page(session_factory: sessionmaker[Session]) -> None:

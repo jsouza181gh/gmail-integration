@@ -136,3 +136,19 @@ def test_unique_version_per_account(sf: sessionmaker[Session]) -> None:
             s.add(CategorySet(version=1, active=True))
     with system_scope(), sf() as s:
         assert len(s.scalars(select(CategorySet)).all()) == 2
+
+
+def test_same_gmail_id_in_two_accounts(
+    session_factory: sessionmaker[Session], second_account: int
+) -> None:
+    from src.db.models import Email
+    from src.db.store import Store
+
+    store = Store(session_factory)
+    for account, subject in ((1, "A"), (second_account, "B")):
+        with account_scope(account), session_factory.begin() as s:
+            s.add(Email(id="m1", subject=subject, attempts=0))
+    for account, subject in ((1, "A"), (second_account, "B")):
+        with account_scope(account):
+            row = store.get_email("m1")
+            assert row is not None and row.subject == subject

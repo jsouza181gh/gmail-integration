@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import cast, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.db.models import Email, EmailEmbedding
 from src.db.session import make_session_factory
 from src.db.vector import EMBED_DIM, Vector
@@ -36,7 +37,7 @@ def pg() -> sessionmaker[Session]:
 def test_vector_roundtrip_and_nearest_first(pg: sessionmaker[Session]) -> None:
     query = tuple(0.9 if j == 1 else (0.1 if j == 0 else 0.0) for j in range(EMBED_DIM))
     with pg() as s:
-        assert s.get_one(EmailEmbedding, "vectest-0").embedding == unit(0)
+        assert s.get_one(EmailEmbedding, email_key("vectest-0")).embedding == unit(0)
         ids = s.scalars(
             select(EmailEmbedding.email_id)
             .where(EmailEmbedding.email_id.like("vectest-%"))
@@ -86,7 +87,7 @@ def test_retriever_merges_vector_and_keyword_pg(pg: sessionmaker[Session]) -> No
             return EmbedResult(vectors=(unit(1),), model="m")
 
     with pg.begin() as s:
-        s.get_one(Email, "vectest-0").subject = "Boleto vectestzz"
+        s.get_one(Email, email_key("vectest-0")).subject = "Boleto vectestzz"
     hits = DbRetriever(IndexStore(pg), OneVector()).search("vectestzz", 2, CallContext())
     ids = [h.id for h in hits]
     assert ids[0] == "vectest-1" and hits[0].score > 0.99
@@ -113,6 +114,6 @@ def test_retriever_falls_back_to_keyword_when_embedding_fails_pg(pg: sessionmake
             raise LLMExhaustedError("cota esgotada", kinds=("rate",))
 
     with pg.begin() as s:
-        s.get_one(Email, "vectest-0").subject = "Boleto vectestyy"
+        s.get_one(Email, email_key("vectest-0")).subject = "Boleto vectestyy"
     hits = DbRetriever(IndexStore(pg), QuotaGone()).search("vectestyy", 2, CallContext())
     assert [h.id for h in hits] == ["vectest-0"]

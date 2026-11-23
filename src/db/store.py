@@ -27,7 +27,7 @@ from src.db.models import (
     WatchState,
 )
 from src.db.rows import EmailRow, RunRow, WatchStateRow
-from src.db.scope import current_account
+from src.db.scope import current_account, email_key
 from src.db.session import make_session_factory
 from src.gmail.messages import MessageSummary
 
@@ -180,7 +180,7 @@ class Store:
 
     def get_email(self, email_id: str) -> EmailRow | None:
         with self.sf() as s:
-            row = s.get(Email, email_id)
+            row = s.get(Email, email_key(email_id))
             return EmailRow.model_validate(row) if row else None
 
     def emails_without_agent_run(self, since: datetime | None = None) -> list[str]:

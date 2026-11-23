@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.agent.actions import ActionService
 from src.agent.config import DbAgentConfigs
 from src.agent.context import AgentContext, LLMDeps, RunScope
@@ -136,7 +137,7 @@ def test_new_email_happy_path_trail(sf: sessionmaker[Session]) -> None:
     assert h.labels.applied == [("a", ("IA/Promoções",))]
     assert h.history.asked == ["ofertas@loja.com"]
     with sf() as s:
-        email = s.get_one(Email, "a")
+        email = s.get_one(Email, email_key("a"))
         assert (email.category, email.is_relevant, email.category_set_id) == ("Promoções", False, 1)
         (action,) = s.scalars(select(SuggestedAction)).all()
         assert (action.kind, action.status, action.run_id) == ("archive", "pending", run_id)
@@ -186,7 +187,7 @@ def test_classification_failure_fails_run_and_raises(sf: sessionmaker[Session]) 
     assert run.status == "failed" and "gemini fora" in (run.error or "")
     assert h.labels.applied == []
     with sf() as s:
-        assert s.get_one(Email, "a").category is None
+        assert s.get_one(Email, email_key("a")).category is None
 
 
 def test_label_failure_does_not_stop_flow(sf: sessionmaker[Session]) -> None:
@@ -299,7 +300,7 @@ def test_enqueue_cli_skips_processed_and_old(sf: sessionmaker[Session]) -> None:
 
     now = datetime.now(UTC)
     with sf.begin() as s:
-        s.get_one(Email, "a").received_at = now
+        s.get_one(Email, email_key("a")).received_at = now
         s.add(Email(id="old", attempts=0, received_at=now - timedelta(days=30)))
         s.add(Email(id="done", attempts=0, received_at=now))
         s.add(AgentRun(trigger="webhook", email_id="done", config_id=1, status="done",

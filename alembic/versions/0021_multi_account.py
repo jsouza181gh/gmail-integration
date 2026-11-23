@@ -25,7 +25,19 @@ OWNED = (
 )
 # Names Postgres gave the unnamed constraints; SQLite batch mode reflects
 # unnamed constraints under the same names through this convention.
-NAMING = {"uq": "%(table_name)s_%(column_0_N_name)s_key"}
+NAMING = {
+    "uq": "%(table_name)s_%(column_0_N_name)s_key",
+    "fk": "%(table_name)s_%(column_0_name)s_fkey",
+    "pk": "%(table_name)s_pkey",
+}
+# Tables whose email_id points at emails; the reference becomes
+# (gmail_account_id, email_id) so a row can only point at its own account's mail.
+EMAIL_REFS = (
+    "run_emails", "agent_runs", "suggested_actions", "feedback", "jobs", "email_embeddings",
+    "attachments", "chat_message_refs", "chat_card_items",
+)
+# Primary keys that gain the account: emails(id), email_embeddings(email_id)
+REKEYED = (("emails", "id"), ("email_embeddings", "email_id"))
 TEMPLATE_EMAIL = "template@invalid"
 LIVE = sa.text("status IN ('pending', 'approved')")
 # (table, old unique columns, new constraint name)
@@ -75,6 +87,8 @@ def upgrade() -> None:
             batch.drop_constraint(f"{table}_{'_'.join(cols)}_key", type_="unique")
             batch.create_unique_constraint(name, ["gmail_account_id", *cols])
 
+    _email_keys(composite=True)
+
     op.drop_index("uq_suggested_actions_live", table_name="suggested_actions")
     op.create_index(
         "uq_suggested_actions_live", "suggested_actions", ["gmail_account_id", "email_id", "kind"],
@@ -110,6 +124,34 @@ def upgrade() -> None:
             "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
     )
+
+
+def _email_keys(composite: bool) -> None:
+    """Swap the emails key and every reference to it (both directions)."""
+    for table in EMAIL_REFS:
+        old = "fk_%s_email" % table if not composite else f"{table}_email_id_fkey"
+        with op.batch_alter_table(table, naming_convention=NAMING) as batch:
+            batch.drop_constraint(old, type_="foreignkey")
+    for table, col in REKEYED:
+        with op.batch_alter_table(table, naming_convention=NAMING) as batch:
+            # the account leads the new primary key, which replaces its own index
+            if composite:
+                batch.drop_index(f"ix_{table}_gmail_account_id")
+            else:
+                batch.create_index(f"ix_{table}_gmail_account_id", ["gmail_account_id"])
+            batch.drop_constraint(f"{table}_pkey", type_="primary")
+            batch.create_primary_key(
+                f"{table}_pkey", ["gmail_account_id", col] if composite else [col]
+            )
+    for table in EMAIL_REFS:
+        with op.batch_alter_table(table, naming_convention=NAMING) as batch:
+            if composite:
+                batch.create_foreign_key(
+                    f"fk_{table}_email", "emails",
+                    ["gmail_account_id", "email_id"], ["gmail_account_id", "id"],
+                )
+            else:
+                batch.create_foreign_key(f"{table}_email_id_fkey", "emails", ["email_id"], ["id"])
 
 
 def _create_first_account() -> None:
@@ -169,6 +211,7 @@ def downgrade() -> None:
         "uq_suggested_actions_live", "suggested_actions", ["email_id", "kind"],
         unique=True, postgresql_where=LIVE, sqlite_where=LIVE,
     )
+    _email_keys(composite=False)
     for table, cols, name in UNIQUES:
         with op.batch_alter_table(table) as batch:
             batch.drop_constraint(name, type_="unique")

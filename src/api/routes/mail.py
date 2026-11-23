@@ -4,6 +4,7 @@ from email.utils import parseaddr
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from src.db.scope import email_key
 from src.api import queries
 from src.api.deps import get_deps, require_user
 from src.db.models import Email, Feedback, KbEntry
@@ -80,7 +81,7 @@ def reclassify(email_id: str, body: ReclassifyIn, request: Request) -> None:
     comment = (body.comment or "").strip()[:COMMENT_MAX] or None
     now = deps.clock()
     with deps.sf.begin() as s:
-        email = s.get(Email, email_id)
+        email = s.get(Email, email_key(email_id))
         if email is None:
             raise HTTPException(404, "e-mail não encontrado")
         email.category = body.category

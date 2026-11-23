@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -25,6 +26,13 @@ from src.db.vector import Vector
 
 class Base(DeclarativeBase):
     pass
+
+
+def _email_fk() -> ForeignKeyConstraint:
+    """(gmail_account_id, email_id) -> emails: a row can only point at its own account's mail."""
+    return ForeignKeyConstraint(
+        ["gmail_account_id", "email_id"], ["emails.gmail_account_id", "emails.id"]
+    )
 
 
 class Run(AccountOwned, Base):
@@ -48,6 +56,9 @@ class Email(AccountOwned, Base):
         Index("ix_emails_relevant_deadline", "is_relevant", "deadline"),
     )
 
+    gmail_account_id: Mapped[int] = mapped_column(
+        ForeignKey("gmail_accounts.id"), primary_key=True
+    )
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     sender: Mapped[str | None] = mapped_column(Text)
     subject: Mapped[str | None] = mapped_column(Text)
@@ -81,9 +92,10 @@ class Email(AccountOwned, Base):
 
 class RunEmail(AccountOwned, Base):
     __tablename__ = "run_emails"
+    __table_args__ = (_email_fk(),)
 
     run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), primary_key=True)
-    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), primary_key=True)
+    email_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -224,10 +236,11 @@ class AgentConfig(AccountOwned, Base):
 
 class AgentRun(AccountOwned, Base):
     __tablename__ = "agent_runs"
+    __table_args__ = (_email_fk(),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     trigger: Mapped[str] = mapped_column(String(16), nullable=False)
-    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"), index=True)
+    email_id: Mapped[str | None] = mapped_column(String(64), index=True)
     config_id: Mapped[int] = mapped_column(ForeignKey("agent_configs.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text)
@@ -324,6 +337,7 @@ class AutomationRule(AccountOwned, Base):
 class SuggestedAction(AccountOwned, Base):
     __tablename__ = "suggested_actions"
     __table_args__ = (
+        _email_fk(),
         # one live proposal per (email, kind); rejected/executed ones may repeat
         Index(
             "uq_suggested_actions_live",
@@ -339,7 +353,7 @@ class SuggestedAction(AccountOwned, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), nullable=False)
+    email_id: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -357,10 +371,11 @@ class Feedback(AccountOwned, Base):
     """The user's verdict on a suggestion (and optional comment -> KB entry)."""
 
     __tablename__ = "feedback"
+    __table_args__ = (_email_fk(),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"), index=True)
-    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
+    email_id: Mapped[str | None] = mapped_column(String(64))
     verdict: Mapped[str] = mapped_column(String(16), nullable=False)
     text: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -389,6 +404,7 @@ class Job(AccountOwned, Base):
 
     __tablename__ = "jobs"
     __table_args__ = (
+        _email_fk(),
         CheckConstraint(
             "kind <> 'process_email' OR email_id IS NOT NULL",
             name="ck_jobs_process_email_has_email",
@@ -429,7 +445,7 @@ class Job(AccountOwned, Base):
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
     run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
+    email_id: Mapped[str | None] = mapped_column(String(64))
     action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
     attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))
     run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"))
@@ -450,13 +466,17 @@ HNSW_OPS = {"embedding": "vector_cosine_ops"}
 class EmailEmbedding(AccountOwned, Base):
     __tablename__ = "email_embeddings"
     __table_args__ = (
+        _email_fk(),
         Index(
             "ix_email_embeddings_hnsw", "embedding",
             postgresql_using="hnsw", postgresql_ops=HNSW_OPS,
         ),
     )
 
-    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), primary_key=True)
+    gmail_account_id: Mapped[int] = mapped_column(
+        ForeignKey("gmail_accounts.id"), primary_key=True
+    )
+    email_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     model: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding: Mapped[tuple[float, ...]] = mapped_column(Vector(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -473,6 +493,7 @@ class Attachment(AccountOwned, Base):
 
     __tablename__ = "attachments"
     __table_args__ = (
+        _email_fk(),
         UniqueConstraint("email_id", "part_id"),
         Index("ix_attachments_status", "status"),
         Index(
@@ -482,7 +503,7 @@ class Attachment(AccountOwned, Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), nullable=False, index=True)
+    email_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     part_id: Mapped[str] = mapped_column(String(32), nullable=False)
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -694,10 +715,11 @@ class ChatMessageRef(AccountOwned, Base):
     """An email an assistant answer referenced, so later turns can say "those"."""
 
     __tablename__ = "chat_message_refs"
+    __table_args__ = (_email_fk(),)
 
     message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id"), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, primary_key=True)
-    email_id: Mapped[str] = mapped_column(ForeignKey("emails.id"), nullable=False)
+    email_id: Mapped[str] = mapped_column(String(64), nullable=False)
     subject: Mapped[str | None] = mapped_column(Text)
     sender: Mapped[str | None] = mapped_column(Text)
 
@@ -779,6 +801,7 @@ class ChatCardItem(AccountOwned, Base):
 
     __tablename__ = "chat_card_items"
     __table_args__ = (
+        _email_fk(),
         CheckConstraint(
             "(CASE WHEN email_id IS NULL THEN 0 ELSE 1 END)"
             " + (CASE WHEN action_id IS NULL THEN 0 ELSE 1 END)"
@@ -790,6 +813,6 @@ class ChatCardItem(AccountOwned, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("chat_cards.id"), nullable=False, index=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
-    email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
+    email_id: Mapped[str | None] = mapped_column(String(64))
     action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
     attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))
