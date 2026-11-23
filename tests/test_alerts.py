@@ -35,7 +35,7 @@ class Sent:
 
 
 def _service(sf: sessionmaker[Session], sent: Sent, clock: Clock) -> AlertService:
-    return AlertService(sf, sent, clock=clock.now)
+    return AlertService(sf, sent, clock=clock.now, account=lambda: 1)
 
 
 def test_second_alert_within_15min_is_suppressed_then_counted(
