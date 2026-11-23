@@ -27,7 +27,7 @@ class Base(DeclarativeBase):
     pass
 
 
-class Run(Base):
+class Run(AccountOwned, Base):
     __tablename__ = "runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -40,7 +40,7 @@ class Run(Base):
     )
 
 
-class Email(Base):
+class Email(AccountOwned, Base):
     __tablename__ = "emails"
     __table_args__ = (
         Index("ix_emails_received_at", "received_at"),
@@ -79,7 +79,7 @@ class Email(Base):
     )
 
 
-class RunEmail(Base):
+class RunEmail(AccountOwned, Base):
     __tablename__ = "run_emails"
 
     run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), primary_key=True)
@@ -106,18 +106,19 @@ class WatchState(Base):
 
 # --- taxonomy (versioned) -----------------------------------------------------
 
-class CategorySet(Base):
+class CategorySet(AccountOwned, Base):
     __tablename__ = "category_sets"
+    __table_args__ = (UniqueConstraint("gmail_account_id", "version"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 
-class CategoryFlag(Base):
+class CategoryFlag(AccountOwned, Base):
     __tablename__ = "category_flags"
     __table_args__ = (UniqueConstraint("set_id", "name"),)
 
@@ -127,7 +128,7 @@ class CategoryFlag(Base):
     definition: Mapped[str] = mapped_column(Text, nullable=False)
 
 
-class Category(Base):
+class Category(AccountOwned, Base):
     __tablename__ = "categories"
     __table_args__ = (UniqueConstraint("set_id", "name"),)
 
@@ -139,7 +140,7 @@ class Category(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
-class CategoryExample(Base):
+class CategoryExample(AccountOwned, Base):
     __tablename__ = "category_examples"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -150,7 +151,7 @@ class CategoryExample(Base):
 
 # --- knowledge base -----------------------------------------------------------
 
-class KbEntry(Base):
+class KbEntry(AccountOwned, Base):
     __tablename__ = "kb_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -166,7 +167,7 @@ class KbEntry(Base):
 
 # --- LLM call log -------------------------------------------------------------
 
-class LlmCall(Base):
+class LlmCall(AccountOwned, Base):
     __tablename__ = "llm_calls"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -192,7 +193,7 @@ class LlmCall(Base):
     agent_step_id: Mapped[int | None] = mapped_column(ForeignKey("agent_steps.id"), index=True)
 
 
-class LlmCallMessage(Base):
+class LlmCallMessage(AccountOwned, Base):
     __tablename__ = "llm_call_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -204,13 +205,14 @@ class LlmCallMessage(Base):
 
 # --- agent: config versions and run trail ------------------------------------
 
-class AgentConfig(Base):
+class AgentConfig(AccountOwned, Base):
     """Immutable version of the agent's behaviour; one is active."""
 
     __tablename__ = "agent_configs"
+    __table_args__ = (UniqueConstraint("gmail_account_id", "version"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     decide_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     chat_prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -220,7 +222,7 @@ class AgentConfig(Base):
     )
 
 
-class AgentRun(Base):
+class AgentRun(AccountOwned, Base):
     __tablename__ = "agent_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -234,7 +236,7 @@ class AgentRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class AgentStep(Base):
+class AgentStep(AccountOwned, Base):
     """One event of a run, in order. `detail` is audit text, never parsed back."""
 
     __tablename__ = "agent_steps"
@@ -252,11 +254,14 @@ class AgentStep(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class GmailLabel(Base):
+class GmailLabel(AccountOwned, Base):
     """Cache of the Gmail ids of the labels the agent applies, by name."""
 
     __tablename__ = "gmail_labels"
 
+    gmail_account_id: Mapped[int] = mapped_column(
+        ForeignKey("gmail_accounts.id"), primary_key=True
+    )
     name: Mapped[str] = mapped_column(String(255), primary_key=True)
     gmail_id: Mapped[str] = mapped_column(String(64), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -266,14 +271,14 @@ class GmailLabel(Base):
 
 # --- agent: policies, suggested actions, automation rules ---------------------
 
-class ToolPolicy(Base):
+class ToolPolicy(AccountOwned, Base):
     """auto | suggest | deny per target (action kind or apply_labels) and trigger.
 
     Code invariants (`NEVER_AUTO`) sit above these rows.
     """
 
     __tablename__ = "tool_policies"
-    __table_args__ = (UniqueConstraint("target", "trigger"),)
+    __table_args__ = (UniqueConstraint("gmail_account_id", "target", "trigger"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     target: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -284,7 +289,7 @@ class ToolPolicy(Base):
     )
 
 
-class AutomationRule(Base):
+class AutomationRule(AccountOwned, Base):
     """Deterministic condition (AND of the non-null fields) -> action."""
 
     __tablename__ = "automation_rules"
@@ -316,12 +321,13 @@ class AutomationRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class SuggestedAction(Base):
+class SuggestedAction(AccountOwned, Base):
     __tablename__ = "suggested_actions"
     __table_args__ = (
         # one live proposal per (email, kind); rejected/executed ones may repeat
         Index(
             "uq_suggested_actions_live",
+            "gmail_account_id",
             "email_id",
             "kind",
             unique=True,
@@ -347,7 +353,7 @@ class SuggestedAction(Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class Feedback(Base):
+class Feedback(AccountOwned, Base):
     """The user's verdict on a suggestion (and optional comment -> KB entry)."""
 
     __tablename__ = "feedback"
@@ -362,7 +368,7 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class Notification(Base):
+class Notification(AccountOwned, Base):
     """Every alert attempt, including the ones suppressed by aggregation."""
 
     __tablename__ = "notifications"
@@ -378,7 +384,7 @@ class Notification(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class Job(Base):
+class Job(AccountOwned, Base):
     """Work queue; payload lives in typed nullable columns per kind."""
 
     __tablename__ = "jobs"
@@ -412,6 +418,7 @@ class Job(Base):
             name="ck_jobs_chat_turn_has_message",
         ),
         Index("ix_jobs_claim", "status", "priority", "run_after"),
+        UniqueConstraint("gmail_account_id", "idempotency_key"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -421,7 +428,7 @@ class Job(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
     run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     email_id: Mapped[str | None] = mapped_column(ForeignKey("emails.id"))
     action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
     attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))
@@ -440,7 +447,7 @@ class Job(Base):
 HNSW_OPS = {"embedding": "vector_cosine_ops"}
 
 
-class EmailEmbedding(Base):
+class EmailEmbedding(AccountOwned, Base):
     __tablename__ = "email_embeddings"
     __table_args__ = (
         Index(
@@ -457,7 +464,7 @@ class EmailEmbedding(Base):
     )
 
 
-class Attachment(Base):
+class Attachment(AccountOwned, Base):
     """A document attached to an email: metadata, extracted text, vector.
 
     The file itself is never stored; `part_id` locates it in the message
@@ -501,7 +508,7 @@ class Attachment(Base):
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class LlmCallEmail(Base):
+class LlmCallEmail(AccountOwned, Base):
     __tablename__ = "llm_call_emails"
 
     call_id: Mapped[int] = mapped_column(ForeignKey("llm_calls.id"), primary_key=True)
@@ -515,6 +522,9 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    email: Mapped[str | None] = mapped_column(Text, unique=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="member",
+                                      server_default="member")
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     totp_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet(APP_SECRET)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -533,6 +543,26 @@ class GmailAccount(Base):
     history_id: Mapped[str | None] = mapped_column(String(32))
     watch_expiration: Mapped[int | None] = mapped_column(BigInteger)
     connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AccountSettings(AccountOwned, Base):
+    """Per-account runtime switches (were global `app_settings` keys)."""
+
+    __tablename__ = "account_settings"
+
+    gmail_account_id: Mapped[int] = mapped_column(
+        ForeignKey("gmail_accounts.id"), primary_key=True
+    )
+    llm_mode: Mapped[str | None] = mapped_column(String(8))
+    backfill_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    backfill_turbo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
@@ -608,7 +638,7 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class ConfigAudit(Base):
+class ConfigAudit(AccountOwned, Base):
     """Every configuration change, rendered as text before -> after."""
 
     __tablename__ = "config_audit"
@@ -624,7 +654,7 @@ class ConfigAudit(Base):
 
 # --- chat ------------------------------------------------------------------
 
-class ChatConversation(Base):
+class ChatConversation(AccountOwned, Base):
     __tablename__ = "chat_conversations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -633,7 +663,7 @@ class ChatConversation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class ChatMessage(Base):
+class ChatMessage(AccountOwned, Base):
     """One turn side: the user's words (text or audio) or the agent's answer."""
 
     __tablename__ = "chat_messages"
@@ -660,7 +690,7 @@ class ChatMessage(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class ChatMessageRef(Base):
+class ChatMessageRef(AccountOwned, Base):
     """An email an assistant answer referenced, so later turns can say "those"."""
 
     __tablename__ = "chat_message_refs"
@@ -672,7 +702,7 @@ class ChatMessageRef(Base):
     sender: Mapped[str | None] = mapped_column(Text)
 
 
-class ChatAudio(Base):
+class ChatAudio(AccountOwned, Base):
     """The original recording of a voice turn."""
 
     __tablename__ = "chat_audio"
@@ -684,7 +714,7 @@ class ChatAudio(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class ChatCard(Base):
+class ChatCard(AccountOwned, Base):
     """Something the agent shows or proposes in a turn; typed columns per kind."""
 
     __tablename__ = "chat_cards"
@@ -744,7 +774,7 @@ class ChatCard(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class ChatCardItem(Base):
+class ChatCardItem(AccountOwned, Base):
     """One email, suggestion or document listed on a card."""
 
     __tablename__ = "chat_card_items"

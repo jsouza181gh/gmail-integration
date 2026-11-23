@@ -11,6 +11,7 @@ from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import current_account
 from src.db.models import Job
 from src.jobs.types import (
     PRIORITY,
@@ -99,6 +100,7 @@ class JobStore:
             "max_attempts": self.max_attempts,
             "run_after": now,
             "idempotency_key": idempotency_key(payload),
+            "gmail_account_id": current_account(),
             **_columns(payload),
             "created_at": now,
         }

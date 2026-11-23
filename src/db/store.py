@@ -27,6 +27,7 @@ from src.db.models import (
     WatchState,
 )
 from src.db.rows import EmailRow, RunRow, WatchStateRow
+from src.db.scope import current_account
 from src.db.session import make_session_factory
 from src.gmail.messages import MessageSummary
 
@@ -37,6 +38,8 @@ def _insert_ignore(
     """INSERT ... ON CONFLICT DO NOTHING, portable across postgres/sqlite."""
     if not rows:
         return
+    account = current_account()  # Core inserts skip the ORM's before_flush fill
+    rows = [{**r, "gmail_account_id": account} for r in rows]
     if session.get_bind().dialect.name == "postgresql":
         session.execute(postgresql.insert(model).values(rows).on_conflict_do_nothing())
     else:

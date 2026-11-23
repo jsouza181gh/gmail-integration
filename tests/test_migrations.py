@@ -27,11 +27,13 @@ EMAIL_COLUMNS = {
 }
 
 
-def _upgraded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Config, str]:
+def _upgraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rev: str = "head"
+) -> tuple[Config, str]:
     url = f"sqlite:///{tmp_path / 't.db'}"
     monkeypatch.setenv("DATABASE_URL", url)
     cfg = Config("alembic.ini")
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, rev)
     return cfg, url
 
 

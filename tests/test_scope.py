@@ -110,3 +110,29 @@ def test_thread_without_scope_fails_closed(sf: sessionmaker[Session]) -> None:
 def test_non_owned_tables_need_no_scope(sf: sessionmaker[Session]) -> None:
     with sf() as s:
         assert s.scalars(select(User)).all() == []
+
+
+OWNED_TABLES = (
+    "runs", "run_emails", "emails", "email_embeddings", "attachments", "category_sets",
+    "category_flags", "categories", "category_examples", "kb_entries", "agent_configs",
+    "agent_runs", "agent_steps", "gmail_labels", "tool_policies", "automation_rules",
+    "suggested_actions", "feedback", "notifications", "jobs", "llm_calls",
+    "llm_call_messages", "llm_call_emails", "config_audit", "chat_conversations",
+    "chat_messages", "chat_message_refs", "chat_audio", "chat_cards", "chat_card_items",
+    "account_settings",
+)
+
+
+def test_models_owned_tables() -> None:
+    missing = [t for t in OWNED_TABLES if "gmail_account_id" not in Base.metadata.tables[t].c]
+    assert missing == []
+
+
+def test_unique_version_per_account(sf: sessionmaker[Session]) -> None:
+    from src.db.models import CategorySet
+
+    for account in (1, 2):
+        with account_scope(account), sf.begin() as s:
+            s.add(CategorySet(version=1, active=True))
+    with system_scope(), sf() as s:
+        assert len(s.scalars(select(CategorySet)).all()) == 2
