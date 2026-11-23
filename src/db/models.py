@@ -19,6 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from src.db.scope import AccountOwned
 from src.db.vector import Vector
 
 
@@ -518,6 +519,23 @@ class User(Base):
     totp_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet(APP_SECRET)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GmailAccount(Base):
+    """A connected Gmail mailbox; owns every content row (`AccountOwned`)."""
+
+    __tablename__ = "gmail_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    email_address: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    history_id: Mapped[str | None] = mapped_column(String(32))
+    watch_expiration: Mapped[int | None] = mapped_column(BigInteger)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class RecoveryCode(Base):

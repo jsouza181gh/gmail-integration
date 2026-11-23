@@ -67,10 +67,19 @@ def test_no_json_columns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert json_cols == []
 
 
+def _not_test_table(obj: object, name: str | None, kind: str, _r: bool, _c: object) -> bool:
+    table = getattr(obj, "table", obj) if kind != "table" else obj
+    return not str(getattr(table, "name", name)).startswith("test_")
+
+
 def test_models_match_migrations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, url = _upgraded(tmp_path, monkeypatch)
     with create_engine(url).connect() as conn:
-        diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+        # test_* tables are test-only models (tests/test_scope.py), never migrated
+        ctx = MigrationContext.configure(
+            conn, opts={"include_object": _not_test_table}
+        )
+        diff = compare_metadata(ctx, Base.metadata)
     assert diff == []
 
 
