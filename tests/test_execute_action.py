@@ -51,7 +51,7 @@ def sf(session_factory: sessionmaker[Session]) -> sessionmaker[Session]:
 
 
 def _job(action_id: int) -> ClaimedJob:
-    return ClaimedJob(id=9, attempts=1, payload=ExecuteActionJob(action_id=action_id))
+    return ClaimedJob(id=9, account_id=1, attempts=1, payload=ExecuteActionJob(action_id=action_id))
 
 
 def _status(sf: sessionmaker[Session], action_id: int) -> str:

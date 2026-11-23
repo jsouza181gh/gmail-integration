@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Protocol
 
+from src.db.scope import account_scope
 from src.jobs.store import JobStore
 from src.jobs.types import ClaimedJob, JobKind
 from src.utils.console import log
@@ -71,6 +72,10 @@ class Worker:
         job = self.store.claim(self.worker_id, kinds=self.kinds, exclude=self.exclude)
         if job is None:
             return False
+        with account_scope(job.account_id):
+            return self._run(job)
+
+    def _run(self, job: ClaimedJob) -> bool:
         kind = job.payload.kind
         handler = self.handlers.get(kind)
         try:

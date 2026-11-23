@@ -195,7 +195,7 @@ def test_start_is_idempotent_and_reuses_the_run(session_factory: sessionmaker[Se
 def test_stray_job_for_future_page_is_ignored(session_factory: sessionmaker[Session]) -> None:
     w = World(session_factory, [["a"], ["b"]])
     run_id = w.backfill.start().run_id
-    w.backfill.handle(ClaimedJob(id=99, attempts=1, payload=BackfillPageJob(run_id=run_id, page_no=5)))
+    w.backfill.handle(ClaimedJob(id=99, account_id=1, attempts=1, payload=BackfillPageJob(run_id=run_id, page_no=5)))
     assert w.lists == []
 
 

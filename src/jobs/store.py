@@ -11,7 +11,7 @@ from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.db.scope import current_account
+from src.db.scope import current_account, system_scope
 from src.db.models import Job
 from src.jobs.types import (
     PRIORITY,
@@ -119,9 +119,10 @@ class JobStore:
         kinds: frozenset[JobKind] | None = None,
         exclude: frozenset[JobKind] = frozenset(),
     ) -> ClaimedJob | None:
-        """Next ready job; `kinds`/`exclude` split the queue between worker lanes."""
+        """Next ready job of any account; `kinds`/`exclude` split the queue
+        between worker lanes. The caller runs the job in `ClaimedJob.account_id`."""
         now = self._now()
-        with self.sf.begin() as s:
+        with system_scope(), self.sf.begin() as s:
             q = (
                 select(Job)
                 .where(Job.status == "queued", Job.run_after <= now)
@@ -141,7 +142,8 @@ class JobStore:
             job.attempts += 1
             job.locked_at = now
             job.locked_by = worker_id
-            return ClaimedJob(id=job.id, attempts=job.attempts, payload=_payload(job))
+            return ClaimedJob(id=job.id, account_id=job.gmail_account_id, attempts=job.attempts,
+                              payload=_payload(job))
 
     def complete(self, job_id: int) -> None:
         with self.sf.begin() as s:
@@ -184,7 +186,7 @@ class JobStore:
         Called once at worker start-up: there is one worker per database, so
         a job still marked running was interrupted (deploy, crash), not slow.
         """
-        with self.sf.begin() as s:
+        with system_scope(), self.sf.begin() as s:
             result = s.execute(
                 update(Job)
                 .where(Job.status == "running")
@@ -223,8 +225,8 @@ class JobStore:
             ]
 
     def requeue_stale(self, older_than: timedelta) -> int:
-        """Running jobs whose worker died go back to the queue."""
-        with self.sf.begin() as s:
+        """Running jobs whose worker died go back to the queue (all accounts)."""
+        with system_scope(), self.sf.begin() as s:
             result = s.execute(
                 update(Job)
                 .where(Job.status == "running", Job.locked_at < self._now() - older_than)

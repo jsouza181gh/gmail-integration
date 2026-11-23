@@ -47,7 +47,7 @@ from tests.agent_fakes import (
     turn,
 )
 
-JOB = ClaimedJob(id=1, attempts=1, payload=ProcessEmailJob(email_id="a"))
+JOB = ClaimedJob(id=1, account_id=1, attempts=1, payload=ProcessEmailJob(email_id="a"))
 ARCHIVE = ToolCallRequest(id="c1", name="propose_action", args={"kind": "archive", "reason": "promo"})
 
 
@@ -259,7 +259,7 @@ def test_truncated_loop_marks_run(sf: sessionmaker[Session]) -> None:
 
 def test_missing_email_is_skipped(sf: sessionmaker[Session]) -> None:
     h = Harness(sf, structured=FakeStructured([]), caller=FakeToolCaller([]))
-    h.flow.handle(ClaimedJob(id=2, attempts=1, payload=ProcessEmailJob(email_id="zz")))
+    h.flow.handle(ClaimedJob(id=2, account_id=1, attempts=1, payload=ProcessEmailJob(email_id="zz")))
     with sf() as s:
         assert s.scalar(select(func.count()).select_from(AgentRun)) == 0
 

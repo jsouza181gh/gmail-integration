@@ -129,7 +129,7 @@ def test_system_mail_never_ingested(session_factory: sessionmaker[Session]) -> N
 def test_quota_exhausted_defers(session_factory: sessionmaker[Session]) -> None:
     emb = FakeEmbedder(fail=LLMExhaustedError("429", kinds=("rate",)))
     idx, _ = make(session_factory, service(mail()), emb)
-    job = ClaimedJob(id=1, attempts=1, payload=IndexEmailJob(email_id="b"))
+    job = ClaimedJob(id=1, account_id=1, attempts=1, payload=IndexEmailJob(email_id="b"))
     with pytest.raises(Deferred):
         idx.handle(job)
 
@@ -138,7 +138,7 @@ def test_other_exhaustion_fails_normally(session_factory: sessionmaker[Session])
     emb = FakeEmbedder(fail=LLMExhaustedError("bad", kinds=("bad_output",)))
     idx, _ = make(session_factory, service(mail()), emb)
     with pytest.raises(LLMExhaustedError):
-        idx.handle(ClaimedJob(id=1, attempts=1, payload=IndexEmailJob(email_id="b")))
+        idx.handle(ClaimedJob(id=1, account_id=1, attempts=1, payload=IndexEmailJob(email_id="b")))
 
 
 @pytest.mark.parametrize(("mime", "name", "size", "inline", "reason"), [

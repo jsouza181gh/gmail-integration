@@ -336,3 +336,40 @@ def test_backfill_attachment_roundtrip_and_key(jobs: JobStore) -> None:
     assert jobs.enqueue(IndexAttachmentJob(attachment_id=3))  # other kind, other key
     first = jobs.claim("w1", kinds=frozenset({"backfill_attachment"}))
     assert first is not None and first.payload == BackfillAttachmentJob(attachment_id=3)
+
+
+@pytest.mark.noscope
+def test_handler_runs_in_job_account(
+    session_factory: sessionmaker[Session], second_account: int, clock: Clock
+) -> None:
+    from src.db.scope import account_scope, current_account
+
+    jobs = JobStore(session_factory, clock=clock.now, max_attempts=5)
+    with account_scope(second_account):
+        jobs.enqueue(ProcessEmailJob(email_id="b"))
+    seen: list[tuple[int, int]] = []
+    w = Worker(jobs, {"process_email": lambda j: seen.append((j.account_id, current_account()))},
+               on_dead=lambda j, e: None, poll_s=0, worker_id="w", heartbeat=None)
+    assert w.run_once() is True
+    assert seen == [(second_account, second_account)]
+    with account_scope(second_account):
+        assert jobs.counts().done == 1
+
+
+@pytest.mark.noscope
+def test_claim_sees_all_accounts(
+    session_factory: sessionmaker[Session], second_account: int, clock: Clock
+) -> None:
+    from src.db.scope import account_scope
+
+    jobs = JobStore(session_factory, clock=clock.now, max_attempts=5)
+    for account in (1, second_account):
+        with account_scope(account):
+            jobs.enqueue(ProcessEmailJob(email_id="same-id"))
+    seen: list[int] = []
+    w = Worker(jobs, {"process_email": lambda j: seen.append(j.account_id)},
+               on_dead=lambda j, e: None, poll_s=0, worker_id="w", heartbeat=None)
+    while w.run_once():
+        pass
+    assert sorted(seen) == [1, second_account]
+    assert jobs.requeue_stale(timedelta(minutes=1)) == 0  # housekeeping needs no scope

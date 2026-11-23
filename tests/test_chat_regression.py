@@ -78,7 +78,7 @@ def test_spam_cleanup_conversation(session_factory: sessionmaker[Session]) -> No
 
     def say(text: str) -> int:
         t = store.start_turn(conv, text=text)
-        flow.handle(ClaimedJob(id=1, attempts=1, payload=ChatTurnJob(message_id=t.assistant.id)))
+        flow.handle(ClaimedJob(id=1, account_id=1, attempts=1, payload=ChatTurnJob(message_id=t.assistant.id)))
         done = store.turn(t.assistant.id).assistant
         assert done.status == "done", done.error
         return t.assistant.id

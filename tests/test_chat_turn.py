@@ -117,7 +117,7 @@ class World:
         )
 
     def handle(self, assistant_id: int) -> None:
-        self.flow.handle(ClaimedJob(id=1, attempts=1, payload=ChatTurnJob(message_id=assistant_id)))
+        self.flow.handle(ClaimedJob(id=1, account_id=1, attempts=1, payload=ChatTurnJob(message_id=assistant_id)))
 
 
 def _call(name: str, cid: str, **args: str) -> ToolCallRequest:
