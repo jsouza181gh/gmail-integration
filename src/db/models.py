@@ -101,21 +101,6 @@ class RunEmail(AccountOwned, Base):
     )
 
 
-class WatchState(Base):
-    __tablename__ = "watch_state"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    email_address: Mapped[str] = mapped_column(Text, nullable=False)
-    history_id: Mapped[str] = mapped_column(String(32), nullable=False)
-    expiration: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
 # --- taxonomy (versioned) -----------------------------------------------------
 
 class CategorySet(AccountOwned, Base):

@@ -21,10 +21,10 @@ from src.db.models import (
     CategoryFlag,
     CategorySet,
     Email,
+    GmailAccount,
     KbEntry,
     Run,
     RunEmail,
-    WatchState,
 )
 from src.db.rows import EmailRow, RunRow, WatchStateRow
 from src.db.scope import current_account, email_key
@@ -292,34 +292,35 @@ class Store:
     # --- gmail watch ------------------------------------------------------
 
     def get_watch_state(self) -> WatchStateRow | None:
+        """The current account's watch cursor; None until the first watch."""
         with self.sf() as s:
-            state = s.get(WatchState, 1)
-            return WatchStateRow.model_validate(state) if state else None
+            acc = s.get(GmailAccount, current_account())
+            if acc is None or acc.history_id is None:
+                return None
+            return WatchStateRow(
+                id=acc.id,
+                email_address=acc.email_address,
+                history_id=acc.history_id,
+                expiration=acc.watch_expiration or 0,
+                updated_at=acc.updated_at,
+            )
 
     def init_watch_state(self, email_address: str, history_id: str, expiration: int) -> None:
-        """Create the state, or on renewal update only address/expiration.
+        """First watch stores the cursor; a renewal updates only address/expiration.
 
         The saved history_id is the sync cursor; a renewed watch returns a
         newer id that must NOT replace it or mail in between would be lost.
         """
         with self.sf.begin() as s:
-            state = s.get(WatchState, 1)
-            if state is None:
-                s.add(
-                    WatchState(
-                        id=1,
-                        email_address=email_address,
-                        history_id=history_id,
-                        expiration=expiration,
-                    )
-                )
-            else:
-                state.email_address = email_address
-                state.expiration = expiration
+            acc = s.get_one(GmailAccount, current_account())
+            acc.email_address = email_address.strip().lower()
+            acc.watch_expiration = expiration
+            if acc.history_id is None:
+                acc.history_id = history_id
 
     def set_history_id(self, history_id: str) -> None:
         with self.sf.begin() as s:
-            s.execute(update(WatchState).where(WatchState.id == 1).values(history_id=history_id))
+            s.get_one(GmailAccount, current_account()).history_id = history_id
 
     # --- taxonomy ---------------------------------------------------------
 

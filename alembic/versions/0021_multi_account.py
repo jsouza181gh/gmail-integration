@@ -124,6 +124,7 @@ def upgrade() -> None:
             "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
     )
+    _move_settings_and_watch_state()
 
 
 def _email_keys(composite: bool) -> None:
@@ -152,6 +153,82 @@ def _email_keys(composite: bool) -> None:
                 )
             else:
                 batch.create_foreign_key(f"{table}_email_id_fkey", "emails", ["email_id"], ["id"])
+
+
+SETTINGS_KEYS = ("llm_mode", "backfill_paused", "backfill_turbo")
+
+
+def _move_settings_and_watch_state() -> None:
+    """Per-account switches leave app_settings; gmail_accounts replaces watch_state."""
+    conn = op.get_bind()
+    values: dict[str, str] = {}
+    for key, value in conn.execute(
+        sa.text("SELECT key, value FROM app_settings WHERE key IN :keys")
+        .bindparams(sa.bindparam("keys", expanding=True)),
+        {"keys": list(SETTINGS_KEYS)},
+    ):
+        values[key] = value
+    account = conn.execute(
+        sa.text("SELECT min(id) FROM gmail_accounts WHERE status = 'connected'")
+    ).scalar()
+    if account is not None:
+        conn.execute(
+            sa.text("INSERT INTO account_settings (gmail_account_id, llm_mode, backfill_paused,"
+                    " backfill_turbo, updated_at) VALUES (:a, :mode, :paused, :turbo,"
+                    " CURRENT_TIMESTAMP)"),
+            {"a": account, "mode": values.get("llm_mode"),
+             "paused": values.get("backfill_paused") == "1",
+             "turbo": values.get("backfill_turbo") == "1"},
+        )
+    conn.execute(
+        sa.text("DELETE FROM app_settings WHERE key IN :keys")
+        .bindparams(sa.bindparam("keys", expanding=True)),
+        {"keys": list(SETTINGS_KEYS)},
+    )
+    op.drop_table("watch_state")
+
+
+def _restore_settings_and_watch_state() -> None:
+    op.create_table(
+        "watch_state",
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("email_address", sa.Text, nullable=False),
+        sa.Column("history_id", sa.String(32), nullable=False),
+        sa.Column("expiration", sa.BigInteger, nullable=False),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+    )
+    conn = op.get_bind()
+    count = conn.execute(sa.text("SELECT count(*) FROM gmail_accounts")).scalar() or 0
+    if count > 1:
+        raise RuntimeError(f"downgrade de 0021 só com uma conta (há {count})")
+    acc = conn.execute(sa.text(
+        "SELECT id, email_address, history_id, watch_expiration FROM gmail_accounts"
+        " WHERE status <> 'template' AND history_id IS NOT NULL"
+    )).first()
+    if acc is None:
+        return
+    conn.execute(
+        sa.text("INSERT INTO watch_state (id, email_address, history_id, expiration, updated_at)"
+                " VALUES (1, :email, :history, :exp, CURRENT_TIMESTAMP)"),
+        {"email": acc.email_address, "history": acc.history_id, "exp": acc.watch_expiration or 0},
+    )
+    row = conn.execute(sa.text(
+        "SELECT llm_mode, backfill_paused, backfill_turbo FROM account_settings"
+        " WHERE gmail_account_id = :a"), {"a": acc.id}).first()
+    if row is None:
+        return
+    pairs = [("llm_mode", row.llm_mode),
+             ("backfill_paused", "1" if row.backfill_paused else None),
+             ("backfill_turbo", "1" if row.backfill_turbo else None)]
+    for key, value in pairs:
+        if value is not None:
+            conn.execute(
+                sa.text("INSERT INTO app_settings (key, value, updated_at)"
+                        " VALUES (:k, :v, CURRENT_TIMESTAMP)"),
+                {"k": key, "v": value},
+            )
 
 
 def _create_first_account() -> None:
@@ -189,6 +266,7 @@ def _create_first_account() -> None:
 
 
 def downgrade() -> None:
+    _restore_settings_and_watch_state()
     op.drop_table("account_settings")
 
     op.create_table(

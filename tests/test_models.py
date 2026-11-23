@@ -1,7 +1,7 @@
 import pytest
 
+from src.db.models import Email, Run, RunEmail
 from src.db.scope import email_key
-from src.db.models import Email, Run, RunEmail, WatchState
 
 
 def test_tables_created(session_factory):
@@ -10,7 +10,6 @@ def test_tables_created(session_factory):
         s.add(Email(id="a"))
         s.flush()
         s.add(RunEmail(run_id=1, email_id="a"))
-        s.add(WatchState(id=1, email_address="x@y", history_id="10", expiration=1))
 
     with session_factory() as s:
         run = s.get(Run, 1)
@@ -19,7 +18,6 @@ def test_tables_created(session_factory):
         assert run.fetch_done is False
         assert s.get(Email, email_key("a")).attempts == 0
         assert s.get(RunEmail, (1, "a")).added_at is not None
-        assert s.get(WatchState, 1).history_id == "10"
 
 
 def test_get_database_url_requires_env(monkeypatch):

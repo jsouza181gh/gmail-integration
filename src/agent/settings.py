@@ -6,7 +6,8 @@ from typing import Literal
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.db.models import AppSetting, ConfigAudit
+from src.db.models import AccountSettings, ConfigAudit
+from src.db.scope import current_account
 
 LlmMode = Literal["free", "fast"]
 LLM_MODE = "llm_mode"
@@ -27,12 +28,23 @@ def audit(
                       before=before, after=after, created_at=now))
 
 
-def _backfill_paused(s: Session) -> bool:
-    row = s.get(AppSetting, BACKFILL_PAUSED)
-    return row is not None and row.value == "1"
+def _settings(s: Session) -> AccountSettings:
+    """The current account's row, created on first use."""
+    row = s.get(AccountSettings, current_account())
+    if row is None:
+        row = AccountSettings(gmail_account_id=current_account())
+        s.add(row)
+        s.flush()
+    return row
+
+
+def _read(s: Session) -> AccountSettings | None:
+    return s.get(AccountSettings, current_account())
 
 
 class RuntimeSettings:
+    """Per-account runtime switches (`account_settings`)."""
+
     def __init__(
         self, session_factory: sessionmaker[Session], clock: Callable[[], datetime] = _utcnow
     ) -> None:
@@ -41,52 +53,46 @@ class RuntimeSettings:
 
     def llm_mode(self) -> LlmMode | None:
         with self.sf() as s:
-            row = s.get(AppSetting, LLM_MODE)
-        if row is None:
+            row = _read(s)
+        if row is None or row.llm_mode is None:
             return None
-        return "fast" if row.value == "fast" else "free"
+        return "fast" if row.llm_mode == "fast" else "free"
 
     def set_llm_mode(self, mode: LlmMode, channel: Channel = "ui") -> None:
         now = self._now()
         with self.sf.begin() as s:
-            row = s.get(AppSetting, LLM_MODE)
-            before = row.value if row else None
-            s.merge(AppSetting(key=LLM_MODE, value=mode, updated_at=now))
+            row = _settings(s)
+            before = row.llm_mode
+            row.llm_mode = mode
             audit(s, "settings", LLM_MODE, channel, before, mode, now)
 
     def backfill_paused(self) -> bool:
         with self.sf() as s:
-            return _backfill_paused(s)
+            row = _read(s)
+            return row is not None and row.backfill_paused
 
     def set_backfill_paused(self, paused: bool, channel: Channel = "ui") -> None:
         """Paused: the history backfill stops at its next page; new mail and chat go on."""
         now = self._now()
         with self.sf.begin() as s:
-            before = _backfill_paused(s)
-            if paused:
-                s.merge(AppSetting(key=BACKFILL_PAUSED, value="1", updated_at=now))
-            else:
-                row = s.get(AppSetting, BACKFILL_PAUSED)
-                if row is not None:
-                    s.delete(row)
+            row = _settings(s)
+            before = row.backfill_paused
+            row.backfill_paused = paused
             audit(s, "settings", BACKFILL_PAUSED, channel,
                   "pausado" if before else "rodando", "pausado" if paused else "rodando", now)
 
     def backfill_turbo(self) -> bool:
         with self.sf() as s:
-            row = s.get(AppSetting, BACKFILL_TURBO)
-            return row is not None and row.value == "1"
+            row = _read(s)
+            return row is not None and row.backfill_turbo
 
     def set_backfill_turbo(self, on: bool, channel: Channel = "ui") -> None:
         """On: the backfill also uses the app key while it is not under pressure."""
         now = self._now()
         with self.sf.begin() as s:
-            row = s.get(AppSetting, BACKFILL_TURBO)
-            before = row is not None and row.value == "1"
-            if on:
-                s.merge(AppSetting(key=BACKFILL_TURBO, value="1", updated_at=now))
-            elif row is not None:
-                s.delete(row)
+            row = _settings(s)
+            before = row.backfill_turbo
+            row.backfill_turbo = on
             audit(s, "settings", BACKFILL_TURBO, channel,
                   "ligado" if before else "desligado", "ligado" if on else "desligado", now)
 

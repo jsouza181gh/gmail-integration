@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, inspect, text
 from src.db.models import Base
 
 TABLES = {
-    "runs", "emails", "run_emails", "watch_state",
+    "runs", "emails", "run_emails", "gmail_accounts", "account_settings",
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
     "jobs", "agent_configs", "agent_runs", "agent_steps",
