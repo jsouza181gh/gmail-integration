@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # before importing modules that read env at import time
 
+from src.cli.account import add_account_arg  # noqa: E402
 from src.cli.classify_unread import DEFAULT_QUERY, run  # noqa: E402
 
 
@@ -23,8 +24,10 @@ def main() -> None:
     parser.add_argument(
         "--max-pages", type=int, default=None, help="páginas a buscar nesta execução"
     )
+    add_account_arg(parser)
     args = parser.parse_args()
-    sys.exit(run(query=args.query, reset=args.reset, max_pages=args.max_pages))
+    sys.exit(run(query=args.query, reset=args.reset, max_pages=args.max_pages,
+                 account=args.account))
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.cli.account import add_account_arg, cli_account  # noqa: E402
 from src.db.store import Store  # noqa: E402
 from src.jobs.store import JobStore  # noqa: E402
 
@@ -47,7 +48,7 @@ def requeue(jobs: JobStore, ids: list[int], all_dead: bool, kind: str | None) ->
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("status")
+    p_status = sub.add_parser("status")
     p_dead = sub.add_parser("dead")
     p_dead.add_argument("--limit", type=int, default=50)
     p_dead.add_argument("--kind")
@@ -55,19 +56,22 @@ def main(argv: list[str] | None = None) -> None:
     p_req.add_argument("ids", nargs="*", type=int)
     p_req.add_argument("--all-dead", action="store_true")
     p_req.add_argument("--kind")
+    for sp in (p_status, p_dead, p_req):
+        add_account_arg(sp)
     args = parser.parse_args(argv)
 
     store = Store()
     try:
-        jobs = JobStore(store.sf)
-        if args.cmd == "status":
-            print(status(jobs))
-        elif args.cmd == "dead":
-            print(dead(jobs, args.limit, args.kind))
-        else:
-            if not args.ids and not args.all_dead:
-                parser.error("informe ids ou --all-dead")
-            print(requeue(jobs, args.ids, args.all_dead, args.kind))
+        with cli_account(store.sf, args.account):
+            jobs = JobStore(store.sf)
+            if args.cmd == "status":
+                print(status(jobs))
+            elif args.cmd == "dead":
+                print(dead(jobs, args.limit, args.kind))
+            else:
+                if not args.ids and not args.all_dead:
+                    parser.error("informe ids ou --all-dead")
+                print(requeue(jobs, args.ids, args.all_dead, args.kind))
     finally:
         store.close()
     sys.exit(0)

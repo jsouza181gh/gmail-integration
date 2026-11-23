@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from dotenv import load_dotenv
 
 from src.agent.approvals import ApprovalService
+from src.cli.account import add_account_arg, cli_account
 from src.db.rows import PendingActionRow
 
 Out = Callable[[str], None]
@@ -41,6 +42,8 @@ def _parser() -> argparse.ArgumentParser:
         d.add_argument("--rule", type=int)
         d.add_argument("--comment")
         d.add_argument("--yes", action="store_true")
+    for sp in (ls, *(sub.choices[n] for n in ("approve", "reject"))):
+        add_account_arg(sp)
     return p
 
 
@@ -53,14 +56,21 @@ def main(
 ) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if service is None:
-        load_dotenv()
-        from src.db.store import Store
-        from src.jobs.store import JobStore
+    if service is not None:
+        return _dispatch(parser, args, service, out, ask)
+    load_dotenv()
+    from src.db.store import Store
+    from src.jobs.store import JobStore
 
-        store = Store()
-        service = ApprovalService(store.sf, JobStore(store.sf))
+    store = Store()
+    with cli_account(store.sf, args.account):
+        return _dispatch(parser, args, ApprovalService(store.sf, JobStore(store.sf)), out, ask)
 
+
+def _dispatch(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, service: ApprovalService,
+    out: Out, ask: Ask,
+) -> int:
     if args.cmd == "list":
         rows = service.pending(sender=args.sender, kind=args.kind, rule_id=args.rule)
         for r in rows:

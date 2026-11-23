@@ -10,20 +10,22 @@ from dotenv import load_dotenv
 load_dotenv()  # before importing modules that read env at import time
 
 from src.classification.classifier import Abort, classify_pending  # noqa: E402
+from src.cli.account import add_account_arg, cli_account  # noqa: E402
 from src.cli.classify_unread import build_classifier, print_report  # noqa: E402
 from src.db.store import Store  # noqa: E402
 from src.utils.console import log  # noqa: E402
 
 
-def run(all_emails: bool = False) -> int:
+def run(all_emails: bool = False, account: str | None = None) -> int:
     store = Store()
     try:
-        run_id = store.start_reclassify_run(only_outdated=not all_emails)
-        log(f"reclassificação run #{run_id}: {store.count_pending(run_id)} pendentes")
-        classify_pending(store, build_classifier(store), run_id)
-        if not store.count_pending(run_id):
-            print_report(store, run_id)
-        return 0
+        with cli_account(store.sf, account):
+            run_id = store.start_reclassify_run(only_outdated=not all_emails)
+            log(f"reclassificação run #{run_id}: {store.count_pending(run_id)} pendentes")
+            classify_pending(store, build_classifier(store), run_id)
+            if not store.count_pending(run_id):
+                print_report(store, run_id)
+            return 0
     except Abort as exc:
         log(f"ABORTADO: {exc}")
         return 1
@@ -46,8 +48,9 @@ def main() -> None:
         action="store_true",
         help="todos os e-mails, não só os classificados com outra versão",
     )
+    add_account_arg(parser)
     args = parser.parse_args()
-    sys.exit(run(all_emails=bool(args.all)))
+    sys.exit(run(all_emails=bool(args.all), account=args.account))
 
 
 if __name__ == "__main__":
