@@ -16,7 +16,7 @@ TABLES = {
     "jobs", "agent_configs", "agent_runs", "agent_steps",
     "tool_policies", "automation_rules", "suggested_actions", "gmail_labels", "feedback", "notifications",
     "email_embeddings", "attachments",
-    "users", "recovery_codes", "auth_sessions", "login_failures", "ip_blocks",
+    "oauth_clients", "users", "recovery_codes", "auth_sessions", "login_failures", "ip_blocks",
     "security_events", "app_settings", "config_audit",
     "chat_conversations", "chat_messages", "chat_audio", "chat_cards", "chat_card_items",
     "chat_message_refs",
