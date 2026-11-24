@@ -127,6 +127,12 @@ export const audit = (limit = 200) =>
 export const securityEvents = (kind?: string) =>
   request('GET', '/api/security/events', { query: { kind }, schema: z.array(s.SecurityEvent) })
 export const securityBlocks = () => request('GET', '/api/security/blocks', { schema: s.BlocksOut })
+// --- gmail ----------------------------------------------------------------
+export const gmailStatus = () => request('GET', '/api/gmail/status', { schema: s.GmailStatus })
+/** Where to send the browser to (re)connect the Gmail at Google. */
+export const connectGmail = () =>
+  request('POST', '/api/oauth/google/connect', { schema: z.object({ url: z.string() }) })
+
 export const notifications = () =>
   request('GET', '/api/notifications', { schema: z.array(s.Notification) })
 

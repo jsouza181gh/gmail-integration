@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import * as api from '../api/endpoints'
 import { ApiError } from '../api/errors'
-import type { Session } from '../api/schemas'
+import type { GmailStatus, Session } from '../api/schemas'
 import { formatDateTime } from '../lib/format'
 import { SECURITY_KIND_OPTIONS, securityKind } from '../lib/labels'
+import { navigateTo } from '../lib/nav'
 import { Badge } from '../ui/Badge'
 import { Empty } from '../ui/Empty'
 import { Icon } from '../ui/Icon'
@@ -27,6 +29,76 @@ function expiresIn(s: Session, now: Date): string {
   const days = Math.ceil((Date.parse(s.expires_at) - now.getTime()) / DAY_MS)
   if (Number.isNaN(days)) return 'expira em data desconhecida'
   return days <= 0 ? 'expira hoje' : `expira em ${days} ${days === 1 ? 'dia' : 'dias'}`
+}
+
+const GMAIL_RESULTS: Record<string, string> = {
+  ok: 'Gmail reconectado.',
+  cancelado: 'Você cancelou a conexão. Nada foi alterado.',
+  'outro-email': 'Essa é outra conta do Google. Entre com o mesmo e-mail que usa no assistente.',
+  'sem-token': 'O Google não completou a autorização. Tente de novo.',
+  'sem-permissao': 'O Google não deu todas as permissões. Tente de novo e deixe todas marcadas.',
+  erro: 'Não foi possível conectar o Gmail. Tente de novo.',
+}
+
+const GMAIL_STATE: Record<GmailStatus['status'], { label: string; text: string }> = {
+  connected: { label: 'Conectado', text: 'O assistente está recebendo e lendo seus e-mails novos.' },
+  disconnected: { label: 'Desconectado', text: 'O assistente não está lendo seus e-mails. Reconecte para voltar a funcionar.' },
+  revoked: { label: 'Acesso revogado', text: 'O Google encerrou o acesso do assistente ao seu Gmail. Reconecte para voltar a funcionar.' },
+  template: { label: 'Conta de modelo', text: 'Esta conta não lê e-mails.' },
+}
+
+function GmailCard() {
+  const toast = useToast()
+  const [params, setParams] = useSearchParams()
+  const status = useQuery({ queryKey: ['gmail-status'], queryFn: api.gmailStatus })
+  const connect = useMutation({
+    mutationFn: api.connectGmail,
+    onSuccess: ({ url }) => navigateTo(url),
+    onError: (err) => toast.show(err instanceof ApiError ? err.detail : 'Não foi possível iniciar a conexão.'),
+  })
+
+  const result = params.get('gmail')
+  useEffect(() => {
+    if (!result) return
+    toast.show(GMAIL_RESULTS[result] ?? GMAIL_RESULTS.erro!)
+    setParams({}, { replace: true })
+  }, [result, toast, setParams])
+
+  const data = status.data
+  const healthy = data?.status === 'connected'
+  const info = data ? GMAIL_STATE[data.status] : null
+  return (
+    <section className="ia-card" style={{ display: 'grid', gap: 12 }} aria-label="Gmail">
+      <div className="spread">
+        <h2 className="h-heading">Gmail</h2>
+        {info ? (
+          healthy ? <Badge tone="accent" icon="check">{info.label}</Badge> : <Badge tone="warning" icon="alert">{info.label}</Badge>
+        ) : null}
+      </div>
+      {status.isError ? <p className="t-small ia-muted" style={{ margin: 0 }}>Não foi possível carregar o estado do Gmail.</p> : null}
+      {data && info ? (
+        <>
+          <p className="t-small" style={{ margin: 0 }}>{data.email_address}</p>
+          <p className="t-small ia-muted" style={{ margin: 0 }}>{info.text}</p>
+          {data.last_sync_at ? (
+            <p className="t-small ia-muted" style={{ margin: 0 }}>{`Última leitura: ${formatDateTime(data.last_sync_at)}`}</p>
+          ) : null}
+          {!healthy && data.last_error ? <p className="warn-line" style={{ margin: 0 }}>{data.last_error}</p> : null}
+        </>
+      ) : null}
+      <div>
+        <button
+          type="button"
+          className={`ia-btn ia-btn--sm${healthy ? '' : ' ia-btn--primary'}`}
+          disabled={connect.isPending || status.isPending}
+          onClick={() => connect.mutate()}
+        >
+          <Icon name="mail" />
+          Reconectar Gmail
+        </button>
+      </div>
+    </section>
+  )
 }
 
 export default function Seguranca() {
@@ -70,6 +142,8 @@ export default function Seguranca() {
 
       <div className="split">
         <div className="split__list" style={{ display: 'grid', gap: 'var(--space-4)' }}>
+          <GmailCard />
+
           <section className="ia-card" style={{ display: 'grid', gap: 12 }} aria-label="Sessões ativas">
             <h2 className="h-heading">Sessões ativas</h2>
             {sessions.isSuccess && sessions.data.length === 0 ? (

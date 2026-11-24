@@ -1,11 +1,21 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http } from 'msw'
-import { expect, test } from 'vitest'
-import type { BlocksOut, Notification, SecurityEvent, Session } from '../src/api/schemas'
+import { expect, test, vi } from 'vitest'
+import type { BlocksOut, GmailStatus, Notification, SecurityEvent, Session } from '../src/api/schemas'
+import { navigateTo } from '../src/lib/nav'
 import { blocks, notification, securityEvent, session } from './fixtures'
 import { server } from './server'
 import { json, noContent, renderApp, signedIn } from './render'
+
+vi.mock('../src/lib/nav', () => ({ navigateTo: vi.fn() }))
+
+const gmailOk: GmailStatus = {
+  email_address: 'joao@gmail.com',
+  status: 'connected',
+  last_sync_at: '2026-11-24T10:00:00Z',
+  last_error: null,
+}
 
 const phone: Session = {
   ...session,
@@ -19,6 +29,7 @@ interface Data {
   blocks?: BlocksOut
   events?: SecurityEvent[]
   notifications?: Notification[]
+  gmail?: GmailStatus
 }
 
 function load(d: Data = {}) {
@@ -32,6 +43,7 @@ function load(d: Data = {}) {
       return json(d.events ?? [securityEvent])
     }),
     http.get('/api/notifications', () => json(d.notifications ?? [notification])),
+    http.get('/api/gmail/status', () => json(d.gmail ?? gmailOk)),
   )
   return kinds
 }
@@ -114,4 +126,62 @@ test('empty_lists_have_messages', async () => {
   expect(await screen.findByText('Nenhum evento registrado.')).toBeInTheDocument()
   expect(screen.getByText('Nenhum alerta enviado.')).toBeInTheDocument()
   expect(screen.getByText('Nenhuma sessão ativa.')).toBeInTheDocument()
+})
+
+test('gmail_card_shows_the_connected_state', async () => {
+  load()
+  renderApp('/seguranca')
+  const card = await screen.findByRole('region', { name: 'Gmail' })
+  expect(await within(card).findByText('Conectado')).toBeInTheDocument()
+  expect(within(card).getByText('joao@gmail.com')).toBeInTheDocument()
+  expect(within(card).getByText(/Última leitura/)).toBeInTheDocument()
+  expect(within(card).getByRole('button', { name: 'Reconectar Gmail' })).toBeEnabled()
+})
+
+test('gmail_card_explains_a_revoked_access', async () => {
+  load({
+    gmail: { ...gmailOk, status: 'revoked', last_sync_at: null, last_error: 'Google revogou o acesso (invalid_grant)' },
+  })
+  renderApp('/seguranca')
+  const card = await screen.findByRole('region', { name: 'Gmail' })
+  expect(await within(card).findByText('Acesso revogado')).toBeInTheDocument()
+  expect(within(card).getByText(/O Google encerrou o acesso/)).toBeInTheDocument()
+  expect(within(card).getByText('Google revogou o acesso (invalid_grant)')).toBeInTheDocument()
+})
+
+test('reconnect_posts_connect_and_goes_to_the_returned_url', async () => {
+  load()
+  let posted = 0
+  server.use(
+    http.post('/api/oauth/google/connect', () => {
+      posted += 1
+      return json({ url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' })
+    }),
+  )
+  const user = userEvent.setup()
+  renderApp('/seguranca')
+  const card = await screen.findByRole('region', { name: 'Gmail' })
+  await user.click(await within(card).findByRole('button', { name: 'Reconectar Gmail' }))
+  await waitFor(() => expect(navigateTo).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=1'))
+  expect(posted).toBe(1)
+})
+
+test('reconnect_failure_is_reported_and_stays_on_the_page', async () => {
+  load()
+  server.use(
+    http.post('/api/oauth/google/connect', () => json({ detail: 'A conexão com o Google ainda não foi configurada.' }, 503)),
+  )
+  vi.mocked(navigateTo).mockClear()
+  const user = userEvent.setup()
+  renderApp('/seguranca')
+  const card = await screen.findByRole('region', { name: 'Gmail' })
+  await user.click(await within(card).findByRole('button', { name: 'Reconectar Gmail' }))
+  expect(await screen.findByText('A conexão com o Google ainda não foi configurada.')).toBeInTheDocument()
+  expect(navigateTo).not.toHaveBeenCalled()
+})
+
+test('result_of_the_google_round_trip_is_announced_once', async () => {
+  load()
+  renderApp('/seguranca?gmail=outro-email')
+  expect(await screen.findByText(/outra conta do Google/)).toBeInTheDocument()
 })
