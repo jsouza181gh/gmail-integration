@@ -22,6 +22,7 @@ from src.db.accounts import admin_account_id
 from src.db.models import Notification
 from src.db.scope import account_scope
 from src.db.store import Store
+from src.gmail.clients import GmailClients
 from src.gmail.messages import SYSTEM_HEADER
 from src.jobs.types import ClaimedJob
 from src.jobs.worker import Handler
@@ -29,7 +30,7 @@ from src.utils.console import log
 
 AlertKind = Literal[
     "job_dead", "agent_failures", "sync_failures", "watch_failures", "backfill_done",
-    "ip_blocked", "global_lock", "refresh_reuse", "login_new_ip",
+    "ip_blocked", "global_lock", "refresh_reuse", "login_new_ip", "gmail_revoked",
 ]
 AlertOutcome = Literal["sent", "suppressed", "failed"]
 
@@ -161,17 +162,34 @@ class AlertService:
         return outcome
 
 
-def build_alert_service(store: Store) -> AlertService:
-    """Real alert service: Gmail send to the watched address, labeled."""
-    from src.gmail.client import get_gmail_service
+def build_alert_service(store: Store, clients: GmailClients | None = None) -> AlertService:
+    """Real alert service: Gmail send (as the admin account) to its own
+    address, labeled."""
     from src.gmail.labels import GmailLabeler
+
+    gmail = (clients or GmailClients(store.sf)).getter()
 
     def address() -> str | None:
         state = store.get_watch_state()
         return state.email_address if state else None
 
-    sender = GmailMailSender(get_gmail_service, GmailLabeler(get_gmail_service, store.sf), address)
+    sender = GmailMailSender(gmail, GmailLabeler(gmail, store.sf), address)
     return AlertService(store.sf, sender)
+
+
+def gmail_revoked_hook(alerts: AlertService) -> Callable[[int, str], None]:
+    """`GmailClients.on_revoked`: tells the admin, naming only the account and
+    the error kind (never mail content)."""
+
+    def hook(account_id: int, email: str) -> None:
+        alerts.alert(
+            "gmail_revoked",
+            f"Gmail de {email} desconectado",
+            f"O Google recusou o acesso da conta {email} (conta {account_id}, erro invalid_grant). "
+            "A pessoa precisa reconectar o Gmail no painel.",
+        )
+
+    return hook
 
 
 class FailureStreak:

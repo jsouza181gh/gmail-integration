@@ -58,7 +58,7 @@ def test_each_kind_maps_to_gmail_call(
 
 def test_block_sender_without_scope_raises_missing_scope() -> None:
     svc = _svc()
-    with pytest.raises(MissingScope, match="reautorize"):
+    with pytest.raises(MissingScope, match="reconecte o Gmail"):
         _gmail(svc, scopes=()).execute("block_sender", make_email("m1"))
     assert svc.calls == []
 

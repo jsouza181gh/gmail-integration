@@ -26,7 +26,7 @@ from src.chat.retrieval import DbDocCatalog, DbEmailLookup, DbRetriever
 from src.chat.store import ChatStore
 from src.db.store import Store
 from src.gmail.actions import GmailActions
-from src.gmail.client import get_gmail_service, has_scope
+from src.gmail.clients import GmailClients
 from src.gmail.labels import GmailLabeler
 from src.gmail.reader import GmailReader
 from src.indexing.store import IndexStore
@@ -45,8 +45,11 @@ class Agent:
         jobs: JobStore,
         gateway: LLMGateway | None = None,
         chat_gateway: LLMGateway | None = None,
+        clients: GmailClients | None = None,
     ) -> None:
         sf = store.sf
+        clients = clients or GmailClients(sf)
+        gmail = clients.getter()
         gateway = gateway or build_gateway(DbCallRecorder(sf))
         chat_gateway = chat_gateway or build_chat_gateway(DbCallRecorder(sf))
         self.trail = Trail(sf)
@@ -54,8 +57,8 @@ class Agent:
         self.actions = ActionService(sf, jobs, self.policy)
         self.executor = ToolExecutor(build_registry(), self.trail)
         kb = DbKb(sf)
-        mail = GmailReader(get_gmail_service)
-        labels = GmailLabeler(get_gmail_service, sf, dry_run=os.getenv("LABELS_DRY_RUN") == "1")
+        mail = GmailReader(gmail)
+        labels = GmailLabeler(gmail, sf, dry_run=os.getenv("LABELS_DRY_RUN") == "1")
         history = DbSenderHistory(sf)
         self.approvals = ApprovalService(sf, jobs)
         self.chat_store = ChatStore(sf)
@@ -96,7 +99,7 @@ class Agent:
 
         self.card_waiter = CardWaiter(self.chat_store, jobs)
         self.execute_action = ExecuteActionFlow(
-            self.approvals, store, GmailActions(get_gmail_service, has_scope),
+            self.approvals, store, GmailActions(gmail, clients.has_scope),
             on_settled=self.card_waiter.on_action_settled,
         )
         self.process_email = ProcessEmailFlow(

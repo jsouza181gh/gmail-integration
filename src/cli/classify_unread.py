@@ -12,7 +12,7 @@ from src.classification.classifier import (
 from src.cli.account import cli_account
 from src.db.rows import EmailRow, RunRow
 from src.db.store import Store
-from src.gmail.client import get_gmail_service
+from src.gmail.clients import GmailClients
 from src.gmail.messages import USER_ID, message_summary
 from src.llm.config import build_gateway
 from src.llm.recorder import DbCallRecorder
@@ -120,7 +120,7 @@ def run(
                 f"{store.count_pending(run_id)} pendentes"
             )
 
-            service = get_gmail_service()
+            service = GmailClients(store.sf).current()
             classifier = build_classifier(store)
             pages_this_session = 0
 

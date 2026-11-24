@@ -40,7 +40,8 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
 
     from src.agent.wiring import Agent
-    from src.alerts.service import FailureStreak, build_alert_service
+    from src.alerts.service import FailureStreak, build_alert_service, gmail_revoked_hook
+    from src.gmail.clients import GmailClients
     from src.indexing.wiring import Indexing
     from src.agent.settings import mode_source, turbo_source
     from src.llm.backfill import BackfillLLM
@@ -58,8 +59,9 @@ def main() -> None:
     mode = mode_source(store.sf, load_llm_config().mode)
     gateway = build_gateway(DbCallRecorder(store.sf), mode)
     chat_gateway = build_chat_gateway(DbCallRecorder(store.sf), mode)
-    agent = Agent(store, jobs, gateway, chat_gateway)
-    indexing = Indexing(store, jobs, gateway)
+    clients = GmailClients(store.sf)
+    agent = Agent(store, jobs, gateway, chat_gateway, clients)
+    indexing = Indexing(store, jobs, gateway, clients)
     # App and new mail first: the history backfill runs on its own key (and in
     # turbo borrows the app key only while it is idle). With one key the
     # backfill shares the app gateway, so a single quota memory exists.
@@ -69,8 +71,9 @@ def main() -> None:
         if load_keys().separate
         else BackfillLLM(gateway, None, lambda: False)
     )
-    backfill_indexing = Indexing(store, jobs, backfill_llm)
-    alerts = build_alert_service(store)
+    backfill_indexing = Indexing(store, jobs, backfill_llm, clients)
+    alerts = build_alert_service(store, clients)
+    clients.on_revoked = gmail_revoked_hook(alerts)
     runs = FailureStreak(
         AGENT_FAILURE_STREAK,
         lambda n, err: alerts.alert(

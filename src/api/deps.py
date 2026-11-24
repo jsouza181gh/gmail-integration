@@ -35,6 +35,10 @@ def _no_gmail() -> Resource:
     raise RuntimeError("Gmail indisponível nesta instância da API")
 
 
+def _nothing_to_start(account_id: int) -> None:
+    """Default `on_connected`: nothing watches the mailbox in this instance."""
+
+
 class StreamTiming:
     """How the chat SSE stream polls the database (seconds)."""
 
@@ -60,6 +64,7 @@ class ApiDeps:
         chat: ChatStore,
         cards: CardService,
         stream: "StreamTiming",
+        on_connected: Callable[[int], None] = _nothing_to_start,
     ) -> None:
         self.sf = sf
         self.settings = settings
@@ -73,6 +78,7 @@ class ApiDeps:
         self.chat = chat
         self.cards = cards
         self.stream = stream
+        self.on_connected = on_connected  # account id: its Gmail was (re)connected
 
     @classmethod
     def build(
@@ -84,6 +90,7 @@ class ApiDeps:
         gmail: Callable[[], Resource] = _no_gmail,
         clock: Callable[[], datetime] = _utcnow,
         stream: "StreamTiming | None" = None,
+        on_connected: Callable[[int], None] = _nothing_to_start,
     ) -> "ApiDeps":
         log = SecurityLog(sf, alerts, clock)
         jobs = JobStore(sf)
@@ -112,6 +119,7 @@ class ApiDeps:
             chat=chat,
             cards=cards,
             stream=stream or StreamTiming(),
+            on_connected=on_connected,
         )
 
 

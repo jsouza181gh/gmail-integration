@@ -537,6 +537,18 @@ class User(Base):
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class OAuthClient(Base):
+    """A Google OAuth client: `platform` (the web app), `desktop` (the
+    legacy token of the first account) or `byo` (a user's own project)."""
+
+    __tablename__ = "oauth_clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    client_id: Mapped[str] = mapped_column(Text, nullable=False)
+    client_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class GmailAccount(Base):
     """A connected Gmail mailbox; owns every content row (`AccountOwned`)."""
 
@@ -549,6 +561,13 @@ class GmailAccount(Base):
     history_id: Mapped[str | None] = mapped_column(String(32))
     watch_expiration: Mapped[int | None] = mapped_column(BigInteger)
     connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Google credentials of this mailbox (status: connected | disconnected |
+    # revoked | template). The refresh token is sealed with APP_SECRET.
+    oauth_client_id: Mapped[int | None] = mapped_column(ForeignKey("oauth_clients.id"))
+    refresh_token_enc: Mapped[str | None] = mapped_column(Text)
+    scopes: Mapped[str | None] = mapped_column(Text)  # space separated
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

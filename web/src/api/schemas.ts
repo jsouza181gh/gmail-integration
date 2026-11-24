@@ -280,6 +280,14 @@ export const Taxonomy = z.object({
 })
 export type Taxonomy = z.infer<typeof Taxonomy>
 
+export const GmailStatus = z.object({
+  email_address: str,
+  status: z.enum(['connected', 'disconnected', 'revoked', 'template']),
+  last_sync_at: strN,
+  last_error: strN,
+})
+export type GmailStatus = z.infer<typeof GmailStatus>
+
 export const Me = z.object({ username: str })
 export type Me = z.infer<typeof Me>
 

@@ -92,9 +92,9 @@ def main(argv: list[str] | None = None) -> None:
             elif args.cmd == "list":
                 print(list_documents(store, args.doc_class, args.doc_type, args.limit))
             else:
-                from src.gmail.client import get_gmail_service
+                from src.gmail.clients import GmailClients
 
-                print(download(store, get_gmail_service, args.attachment_id, args.out))
+                print(download(store, GmailClients(db.sf).getter(), args.attachment_id, args.out))
     finally:
         db.close()
     sys.exit(0)
