@@ -51,7 +51,7 @@ class GmailActions:
         if not self._has_scope(SETTINGS_SCOPE):
             raise MissingScope(
                 "bloquear remetente exige o escopo gmail.settings.basic: "
-                "reautorize com python -m src.gmail.authorize e recopie o token.json"
+                "reconecte o Gmail no painel (Segurança, Reconectar Gmail) para dar a permissão"
             )
         address = parseaddr(email.sender or "")[1].lower()
         if "@" not in address:
