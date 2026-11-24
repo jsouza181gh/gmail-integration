@@ -2,7 +2,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from googleapiclient.discovery import Resource
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,6 +17,7 @@ from src.auth.security_log import Alerter, SecurityLog
 from src.auth.service import AuthService
 from src.chat.cards import CardService
 from src.chat.store import ChatStore
+from src.db.models import User
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
 
@@ -128,6 +129,21 @@ def require_user(request: Request) -> int:
     user_id = read_access(token, deps.settings, deps.clock()) if token else None
     if user_id is None:
         raise HTTPException(401, "sessão expirada")
+    return user_id
+
+
+def optional_user(request: Request) -> int | None:
+    """The logged-in user, if any (for events recorded outside `require_user` routes)."""
+    deps = get_deps(request)
+    token = request.cookies.get(ACCESS_COOKIE)
+    return read_access(token, deps.settings, deps.clock()) if token else None
+
+
+def require_admin(request: Request, user_id: int = Depends(require_user)) -> int:
+    with get_deps(request).sf() as s:
+        user = s.get(User, user_id)
+        if user is None or user.role != "admin":
+            raise HTTPException(403, "só o administrador")
     return user_id
 
 

@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from src.api.deps import ApiDeps
@@ -23,6 +24,7 @@ from src.api.security import RateLimiter, security_middleware
 from src.api.static import mount_web
 from src.auth.crypto import read_access
 from src.db.accounts import account_for_user
+from src.db.scope import ScopeError
 from src.utils.console import log
 
 
@@ -122,12 +124,33 @@ def create_app(
     )
     app.middleware("http")(security_middleware(RateLimiter()))
     if api is not None:
-        from src.api.routes import actions, agent, auth, chat, documents, mail, ops, security
+        from src.api.routes import (
+            actions,
+            admin,
+            admin_invites,
+            agent,
+            auth,
+            chat,
+            documents,
+            mail,
+            ops,
+            security,
+            settings,
+        )
 
         app.state.deps = api
         app.add_middleware(AccountScopeMiddleware, resolve=account_resolver(api))
-        for module in (auth, mail, actions, documents, ops, security, agent, chat):
+        for module in (auth, mail, actions, documents, ops, security, agent, chat, settings,
+                       admin, admin_invites):
             app.include_router(module.router)
+
+        @app.exception_handler(ScopeError)
+        def no_account(request: Request, exc: ScopeError) -> JSONResponse:
+            # a logged-in user with no Gmail account yet: send them to onboarding
+            return JSONResponse(
+                {"detail": "Conecte seu Gmail para continuar.", "code": "no_account"},
+                status_code=409,
+            )
 
     @app.post("/webhooks/gmail")
     async def gmail_webhook(request: Request, background: BackgroundTasks) -> Response:

@@ -32,6 +32,9 @@ class SecondFactorIn(Schema):
 
 class MeOut(Schema):
     username: str
+    role: str
+    email: str | None
+    onboarding_step: str | None
 
 
 class SessionOut(Schema):
@@ -123,7 +126,8 @@ def me(request: Request, user_id: int = Depends(require_user)) -> MeOut:
         user = s.get(User, user_id)
         if user is None:
             raise HTTPException(401, "usuário não existe")
-        return MeOut(username=user.username)
+        return MeOut(username=user.username, role=user.role, email=user.email,
+                     onboarding_step=user.onboarding_step)
 
 
 @router.get("/sessions")

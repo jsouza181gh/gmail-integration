@@ -15,13 +15,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import pyotp
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.auth.config import AuthSettings
 from src.auth.crypto import (
     DUMMY_HASH,
     decrypt,
+    encrypt,
+    hash_password,
     issue_access,
     new_token,
     token_hash,
@@ -42,6 +44,7 @@ from src.llm.types import Schema
 FAILURE_WINDOW = timedelta(hours=24)
 IP_FAILURES_TO_BLOCK = 3
 IPS_TO_LOCK_GLOBALLY = 3
+PASSWORD_MIN = 12
 REFRESH_REUSE_GRACE = timedelta(seconds=10)
 GLOBAL_LOCK = "global_lock"
 GLOBAL_UNLOCKED_AT = "global_unlocked_at"
@@ -53,6 +56,17 @@ class LoginStep(Schema):
     ok: bool
     user_id: int | None
     blocked: bool
+
+
+class NewTotp(Schema):
+    """What the user needs to enrol the authenticator again (shown once)."""
+
+    otpauth_uri: str
+    secret: str
+    recovery_codes: tuple[str, ...]
+
+
+PasswordResult = Literal["ok", "wrong_password", "weak"]
 
 
 class IssuedSession(Schema):
@@ -111,7 +125,9 @@ class AuthService:
                 return "ip_blocked"
         return "ok"
 
-    def _fail(self, ip: str, stage: Literal["password", "totp"], detail: str) -> None:
+    def _fail(
+        self, ip: str, stage: Literal["password", "totp"], detail: str, user_id: int | None = None
+    ) -> None:
         now = self._now()
         since = now - FAILURE_WINDOW
         with self.sf.begin() as s:
@@ -140,7 +156,7 @@ class AuthService:
             lock_global = distinct_ips >= IPS_TO_LOCK_GLOBALLY and self._setting(s, GLOBAL_LOCK) != "1"
             if lock_global:
                 s.merge(AppSetting(key=GLOBAL_LOCK, value="1", updated_at=now))
-        self.log.record("login_fail" if stage == "password" else "totp_fail", ip, detail)
+        self.log.record("login_fail" if stage == "password" else "totp_fail", ip, detail, user_id)
         if block_ip:
             self.log.record("ip_blocked", ip, f"{ip_failures} falhas de login em 24h")
         if lock_global:
@@ -180,13 +196,15 @@ class AuthService:
             password_hash = user.password_hash if user else DUMMY_HASH
             user_id = user.id if user else None
         if user_id is None or not verify_password(password_hash, password):
-            self._fail(ip, "password", f"usuário {username[:64]!r}")
+            self._fail(ip, "password", f"usuário {username[:64]!r}", user_id)
             return LoginStep(ok=False, user_id=None, blocked=self.check_open(ip) != "ok")
         return LoginStep(ok=True, user_id=user_id, blocked=False)
 
     def _second_factor_ok(self, s: Session, user: User, code: str) -> bool:
         digits = code.strip().replace(" ", "")
         if digits.isdigit() and len(digits) == 6:
+            if not user.totp_secret_enc:  # 2FA was reset: only a new enrolment gets back in
+                return False
             secret = decrypt(user.totp_secret_enc, self.settings.app_secret)
             return pyotp.TOTP(secret).verify(digits, for_time=self._now(), valid_window=1)
         rc = s.scalars(
@@ -208,7 +226,7 @@ class AuthService:
             user = s.get(User, user_id)
             ok = user is not None and self._second_factor_ok(s, user, code)
         if not ok:
-            self._fail(ip, "totp", "segundo fator inválido")
+            self._fail(ip, "totp", "segundo fator inválido", user_id)
             return None
         with self.sf() as s:
             seen = s.scalar(
@@ -216,9 +234,11 @@ class AuthService:
                 .where(SecurityEvent.kind == "login_ok", SecurityEvent.ip == ip)
             ) or 0
         issued = self._new_family(user_id, ip, user_agent)
-        self.log.record("login_ok", ip, user_agent[:200])
+        self.log.record("login_ok", ip, user_agent[:200], user_id)
         if not seen:
-            self.log.record("login_new_ip", ip, f"primeiro login deste IP ({user_agent[:200]})")
+            self.log.record(
+                "login_new_ip", ip, f"primeiro login deste IP ({user_agent[:200]})", user_id
+            )
         return issued
 
     # --- sessions ---------------------------------------------------------------
@@ -270,14 +290,16 @@ class AuthService:
                     return None  # two tabs refreshed at once; the other one won
                 self._revoke(s, row.family_id, "reuse")
                 reused = True
-                family_id = row.family_id
+                family_id, owner = row.family_id, row.user_id
             else:
                 row.rotated_at = now
                 row.last_used_at = now
                 user_id, family_id = row.user_id, row.family_id
                 new_raw = self._store_token(s, user_id, family_id, ip, user_agent)
         if reused:
-            self.log.record("refresh_reuse", ip, f"família {family_id} revogada ({user_agent[:200]})")
+            self.log.record(
+                "refresh_reuse", ip, f"família {family_id} revogada ({user_agent[:200]})", owner
+            )
             return None
         return self._issued(user_id, family_id, new_raw)
 
@@ -289,8 +311,8 @@ class AuthService:
             if row is None:
                 return
             self._revoke(s, row.family_id, "logout")
-            ip = row.ip
-        self.log.record("logout", ip, "")
+            ip, owner = row.ip, row.user_id
+        self.log.record("logout", ip, "", owner)
 
     def family_of(self, raw: str) -> str | None:
         with self.sf() as s:
@@ -336,5 +358,86 @@ class AuthService:
             ).first()
             if owned is None or not self._revoke(s, family_id, "user"):
                 return False
-        self.log.record("session_revoked", None, f"família {family_id}")
+        self.log.record("session_revoked", None, f"família {family_id}", user_id)
+        return True
+
+    # --- account management (the user's own credentials) -----------------------
+
+    def revoke_others(self, user_id: int, keep_family: str | None) -> int:
+        """End every session of the user except the one making the request."""
+        with self.sf.begin() as s:
+            families = s.scalars(
+                select(AuthSession.family_id).where(
+                    AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None)
+                ).distinct()
+            ).all()
+            ended = sum(self._revoke(s, f, "user") > 0 for f in families if f != keep_family)
+        if ended:
+            self.log.record("sessions_revoked", None, f"{ended} sessão(ões) encerrada(s)", user_id)
+        return ended
+
+    def change_password(
+        self, user_id: int, current: str, new: str, keep_family: str | None
+    ) -> PasswordResult:
+        if len(new) < PASSWORD_MIN:
+            return "weak"
+        with self.sf.begin() as s:
+            user = s.get(User, user_id)
+            if user is None:
+                return "wrong_password"
+            # a Google-only user has no password yet: nothing to confirm
+            if user.password_hash and not verify_password(user.password_hash, current):
+                return "wrong_password"
+            user.password_hash = hash_password(new)
+            user.password_changed_at = self._now()
+        self.log.record("password_changed", None, "senha trocada", user_id)
+        self.revoke_others(user_id, keep_family)
+        return "ok"
+
+    def rotate_totp(
+        self, user_id: int, password: str, code: str, keep_family: str | None
+    ) -> NewTotp | None:
+        """New authenticator secret + recovery codes, after password and a live code."""
+        from src.cli.create_user import ISSUER, RECOVERY_CODES, _recovery_code
+
+        secret = pyotp.random_base32()
+        codes = tuple(_recovery_code() for _ in range(RECOVERY_CODES))
+        with self.sf.begin() as s:
+            user = s.get(User, user_id)
+            if user is None or not user.totp_secret_enc:
+                return None
+            if user.password_hash and not verify_password(user.password_hash, password):
+                return None
+            digits = code.strip().replace(" ", "")
+            current = decrypt(user.totp_secret_enc, self.settings.app_secret)
+            if not (digits.isdigit() and len(digits) == 6
+                    and pyotp.TOTP(current).verify(digits, for_time=self._now(), valid_window=1)):
+                return None
+            user.totp_secret_enc = encrypt(secret, self.settings.app_secret)
+            s.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user_id))
+            s.add_all(
+                RecoveryCode(user_id=user_id, code_hash=token_hash(normalize_recovery(c)))
+                for c in codes
+            )
+            label = user.email or user.username
+        self.log.record("totp_changed", None, "autenticador trocado", user_id)
+        self.revoke_others(user_id, keep_family)
+        uri = pyotp.TOTP(secret).provisioning_uri(name=label, issuer_name=ISSUER)
+        return NewTotp(otpauth_uri=uri, secret=secret, recovery_codes=codes)
+
+    def reset_totp(self, user_id: int, by_admin: int) -> bool:
+        """Admin: drop the user's second factor and sessions; they enrol again at next login."""
+        with self.sf.begin() as s:
+            user = s.get(User, user_id)
+            if user is None:
+                return False
+            user.totp_secret_enc = ""  # STUB(fase 3): vira NULL quando a coluna aceitar nulo
+            user.onboarding_step = "totp"
+            s.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user_id))
+            s.execute(
+                update(AuthSession)
+                .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+                .values(revoked_at=self._now(), revoke_reason="totp_reset")
+            )
+        self.log.record("totp_reset", None, f"2FA resetado pelo administrador #{by_admin}", user_id)
         return True

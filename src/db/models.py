@@ -535,6 +535,8 @@ class User(Base):
     totp_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet(APP_SECRET)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # STUB(fase 3): substituído no merge (0023 cria a coluna)
+    onboarding_step: Mapped[str | None] = mapped_column(String(16))
 
 
 class GmailAccount(Base):
@@ -549,9 +551,38 @@ class GmailAccount(Base):
     history_id: Mapped[str | None] = mapped_column(String(32))
     watch_expiration: Mapped[int | None] = mapped_column(BigInteger)
     connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # STUB(fase 2): substituído no merge (0022 cria as colunas)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class Invite(Base):
+    """STUB(fase 3): substituído no merge (0023 cria a tabela)."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserLlmKey(Base):
+    """STUB(fase 4): substituído no merge (0024 cria a tabela)."""
+
+    __tablename__ = "user_llm_keys"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    app_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    backfill_key_enc: Mapped[str | None] = mapped_column(Text)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class AccountSettings(AccountOwned, Base):
@@ -629,6 +660,8 @@ class SecurityEvent(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     ip: Mapped[str | None] = mapped_column(String(64))
     detail: Mapped[str] = mapped_column(Text, nullable=False)
+    # who the event is about; NULL = platform-wide (IP blocks, global lock), admin only
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

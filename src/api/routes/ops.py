@@ -179,7 +179,7 @@ def backfill(request: Request) -> BackfillStatus:
     return _status(get_deps(request))
 
 
-def _start(deps: ApiDeps) -> None:
+def start_backfill(deps: ApiDeps) -> None:
     run = deps.index_store.backfill_run(RUN_QUERY)
     if not run.fetch_done:
         deps.jobs.enqueue(BackfillPageJob(run_id=run.id, page_no=run.pages))
@@ -188,7 +188,7 @@ def _start(deps: ApiDeps) -> None:
 @router.post("/backfill/start")
 def backfill_start(request: Request) -> BackfillStatus:
     deps = get_deps(request)
-    _start(deps)
+    start_backfill(deps)
     return _status(deps)
 
 
@@ -219,7 +219,7 @@ def backfill_resume(request: Request) -> BackfillStatus:
                    Job.last_error == PAUSED_REASON)
             .values(run_after=deps.clock(), last_error=None)
         )
-    _start(deps)
+    start_backfill(deps)
     return _status(deps)
 
 
