@@ -147,3 +147,15 @@ button.ia-bottomnav__item { border: 0; background: none; cursor: pointer; }
 .policy-select { width: 180px; height: 36px; }
 .prompt-box { min-height: 220px; resize: vertical; padding: 12px; border-radius: 12px; border: 0; background: var(--bg); color: var(--ink); font: 400 13px/20px var(--font-mono); }
 .history-when { width: 120px; flex: none; }
+
+/* panel: warnings banner, settings, admin, onboarding finish */
+.warnings { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-8) 0; }
+.warnings__item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--card); border-radius: var(--radius-md); font-size: 14px; line-height: 20px; }
+.warnings__text { flex: 1; min-width: 0; }
+.stack { display: grid; gap: var(--space-4); }
+.cols-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-4); align-items: start; }
+.copy-box { display: flex; gap: var(--space-2); align-items: center; }
+.copy-box .ia-input { flex: 1; min-width: 0; }
+.finish { min-height: 100vh; display: grid; place-items: center; padding: var(--space-4); }
+.finish__card { width: min(520px, 100%); display: grid; gap: var(--space-4); }
+@media (max-width: 720px) { .warnings { padding: var(--space-3) var(--space-4) 0; } .warnings__item { flex-wrap: wrap; } }

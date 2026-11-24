@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import * as api from '../api/endpoints'
 import { ApiError } from '../api/errors'
+import { useMe } from '../api/hooks'
 import type { Session } from '../api/schemas'
 import { formatDateTime } from '../lib/format'
 import { SECURITY_KIND_OPTIONS, securityKind } from '../lib/labels'
@@ -35,8 +36,11 @@ export default function Seguranca() {
   const [kind, setKind] = useState('')
   const [now] = useState(() => new Date())
 
+  const me = useMe()
+  const admin = me.data?.role === 'admin'
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: api.sessions })
-  const blocks = useQuery({ queryKey: ['blocks'], queryFn: api.securityBlocks })
+  // IP blocks are platform-wide: only the admin sees them
+  const blocks = useQuery({ queryKey: ['blocks'], queryFn: api.securityBlocks, enabled: admin })
   const events = useQuery({ queryKey: ['security-events', kind], queryFn: () => api.securityEvents(kind || undefined) })
   const notifications = useQuery({ queryKey: ['notifications'], queryFn: api.notifications })
 
@@ -55,12 +59,14 @@ export default function Seguranca() {
   return (
     <Page>
       <PageHead
-        title={blocks.isPending ? 'Segurança' : restricted ? 'Atenção: login com restrições' : 'Tudo em ordem'}
+        title={!admin ? 'Segurança' : blocks.isPending ? 'Segurança' : restricted ? 'Atenção: login com restrições' : 'Tudo em ordem'}
         subtitle={
-          blocks.isPending ? undefined : restricted ? 'Veja os bloqueios abaixo.' : 'Login aberto, nenhum IP bloqueado.'
+          !admin
+            ? 'Os aparelhos conectados e o que aconteceu na sua conta.'
+            : blocks.isPending ? undefined : restricted ? 'Veja os bloqueios abaixo.' : 'Login aberto, nenhum IP bloqueado.'
         }
         actions={
-          blocks.isPending ? undefined : restricted ? (
+          !admin || blocks.isPending ? undefined : restricted ? (
             <Badge tone="warning" icon="alert">Login com restrições</Badge>
           ) : (
             <Badge tone="accent" icon="shield">Login aberto</Badge>
@@ -102,6 +108,7 @@ export default function Seguranca() {
             ))}
           </section>
 
+          {admin ? (
           <section className="ia-card" style={{ display: 'grid', gap: 12 }} aria-label="Bloqueios">
             <h2 className="h-heading">Bloqueios</h2>
             {blocks.data?.global_lock ? (
@@ -124,6 +131,7 @@ export default function Seguranca() {
               Desbloqueio só pela VPS (<code style={{ fontFamily: 'var(--font-mono)' }}>src.cli.unlock</code>).
             </p>
           </section>
+          ) : null}
 
           <section className="ia-card" style={{ display: 'grid', gap: 12 }} aria-label="Alertas enviados">
             <h2 className="h-heading">Alertas enviados</h2>
