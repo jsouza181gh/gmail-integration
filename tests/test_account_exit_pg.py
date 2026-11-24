@@ -5,14 +5,16 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session, sessionmaker
 
 import src.accounts.exit as exit_mod
-from src.accounts.exit import account_tables, delete_account, user_tables
+from src.accounts.exit import delete_account
 from src.db.models import GmailAccount, User
 from src.db.scope import system_scope
 from src.db.session import make_session_factory
 from src.gmail.clients import GmailClients
+from tests import exit_seed
 from tests.exit_seed import rows_of, seed_account
 
 URL = os.getenv("TEST_DATABASE_URL")
@@ -27,6 +29,13 @@ A, B = 9101, 9102  # account ids == user ids; far from real data
 @pytest.fixture
 def pg(monkeypatch: pytest.MonkeyPatch) -> Iterator[sessionmaker[Session]]:
     sf = make_session_factory(URL)
+    # other test modules register throwaway tables on Base.metadata (test_scope):
+    # only the tables the migrated database really has take part
+    real = set(inspect(sf.kw["bind"]).get_table_names())
+    for module in (exit_mod, exit_seed):
+        for fn in ("account_tables", "user_tables"):
+            original = getattr(exit_mod, fn)
+            monkeypatch.setattr(module, fn, lambda original=original: [n for n in original() if n in real])
     monkeypatch.setattr(exit_mod, "stop_watch", lambda _c, _a: None)
     monkeypatch.setattr(exit_mod, "revoke_token", lambda _sf, _a: None)
     for n in (A, B):
@@ -51,7 +60,7 @@ def _clean(sf: sessionmaker[Session], n: int) -> None:
 
 def test_delete_in_postgres_leaves_nothing_of_a(pg: sessionmaker[Session]) -> None:
     filled = rows_of(pg, A, A)
-    for name in [*account_tables(), *user_tables()]:
+    for name in [*exit_mod.account_tables(), *exit_mod.user_tables()]:
         assert name in filled, f"{name} not seeded"
     before_b = rows_of(pg, B, B)
     delete_account(pg, GmailClients(pg), A)
