@@ -156,7 +156,7 @@ Tudo sob `/api`, mesma origem do front (a própria API serve o painel em `/`; o 
 Ligar na VPS:
 
 1. No `.env`: `JWT_SECRET` (`python -c "import secrets;print(secrets.token_urlsafe(48))"`), `APP_SECRET` (`python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"`), `APP_ORIGIN=https://<SEU_DOMINIO>`, `APP_ENV=production`. Sem `JWT_SECRET` a API do painel fica desligada (webhook segue funcionando).
-2. `docker compose up -d` e crie o usuário: `docker compose exec api python -m src.cli.create_user <usuario>` — escaneie o QR e guarde os 10 recovery codes.
+2. `docker compose up -d` e convide quem vai usar: `docker compose exec api python -m src.cli.invite <email>` — copie o link impresso e mande à pessoa; ela entra com o Google, cadastra o app autenticador e guarda os 10 recovery codes.
 3. Nginx (no mesmo `server` HTTPS do webhook):
 
 ```nginx

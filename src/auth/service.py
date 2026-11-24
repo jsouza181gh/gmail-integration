@@ -3,12 +3,12 @@
 - Lock checks run *before* the password is verified, so a blocked IP learns
   nothing even with the right password.
 - 3 failures (password or second factor) from one IP within 24 h block that
-  IP until a manual unlock; failures from 3+ distinct IPs within 24 h close
-  the login globally. Failures before an unlock no longer count.
+  IP until a manual unlock (IP blocking is global). Failures against one
+  user from 3+ distinct IPs within 24 h lock *that user* until a manual
+  unlock; other users keep logging in. Failures before an unlock no longer count.
 - Refresh tokens rotate on every use; presenting an already-rotated token
   (outside a short grace for two tabs racing) revokes the whole family.
 """
-import re
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -21,15 +21,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.auth.config import AuthSettings
 from src.auth.crypto import (
     DUMMY_HASH,
-    decrypt,
     issue_access,
     new_token,
     token_hash,
     verify_password,
 )
+from src.auth.enroll import normalize_recovery, totp_matches
 from src.auth.security_log import SecurityLog
 from src.db.models import (
-    AppSetting,
     AuthSession,
     IpBlock,
     LoginFailure,
@@ -41,12 +40,10 @@ from src.llm.types import Schema
 
 FAILURE_WINDOW = timedelta(hours=24)
 IP_FAILURES_TO_BLOCK = 3
-IPS_TO_LOCK_GLOBALLY = 3
+IPS_TO_LOCK_USER = 3
 REFRESH_REUSE_GRACE = timedelta(seconds=10)
-GLOBAL_LOCK = "global_lock"
-GLOBAL_UNLOCKED_AT = "global_unlocked_at"
 
-Openness = Literal["ok", "ip_blocked", "global_lock"]
+Openness = Literal["ok", "ip_blocked"]
 
 
 class LoginStep(Schema):
@@ -79,10 +76,6 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
-def normalize_recovery(code: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", code.lower())
-
-
 class AuthService:
     def __init__(
         self,
@@ -98,36 +91,31 @@ class AuthService:
 
     # --- lockouts -------------------------------------------------------------
 
-    def _setting(self, s: Session, key: str) -> str | None:
-        row = s.get(AppSetting, key)
-        return row.value if row else None
-
     def check_open(self, ip: str) -> Openness:
         with self.sf() as s:
-            if self._setting(s, GLOBAL_LOCK) == "1":
-                return "global_lock"
             block = s.get(IpBlock, ip)
             if block is not None and block.unblocked_at is None:
                 return "ip_blocked"
         return "ok"
 
-    def _fail(self, ip: str, stage: Literal["password", "totp"], detail: str) -> None:
+    def user_locked(self, user_id: int) -> bool:
+        with self.sf() as s:
+            user = s.get(User, user_id)
+            return user is not None and user.locked_at is not None
+
+    def _fail(
+        self, ip: str, stage: Literal["password", "totp"], detail: str, user_id: int | None
+    ) -> None:
         now = self._now()
         since = now - FAILURE_WINDOW
         with self.sf.begin() as s:
-            s.add(LoginFailure(ip=ip, stage=stage, created_at=now))
+            s.add(LoginFailure(ip=ip, stage=stage, created_at=now, user_id=user_id))
             s.flush()
             block = s.get(IpBlock, ip)
             ip_since = max(since, _aware(block.unblocked_at)) if block and block.unblocked_at else since
             ip_failures = s.scalar(
                 select(func.count()).select_from(LoginFailure)
                 .where(LoginFailure.ip == ip, LoginFailure.created_at > ip_since)
-            ) or 0
-            unlocked = self._setting(s, GLOBAL_UNLOCKED_AT)
-            g_since = max(since, datetime.fromisoformat(unlocked)) if unlocked else since
-            distinct_ips = s.scalar(
-                select(func.count(func.distinct(LoginFailure.ip)))
-                .where(LoginFailure.created_at > g_since)
             ) or 0
             block_ip = ip_failures >= IP_FAILURES_TO_BLOCK and (block is None or block.unblocked_at is not None)
             if block_ip:
@@ -137,14 +125,25 @@ class AuthService:
                     block.reason, block.created_at, block.unblocked_at = (
                         f"{ip_failures} falhas em 24h", now, None,
                     )
-            lock_global = distinct_ips >= IPS_TO_LOCK_GLOBALLY and self._setting(s, GLOBAL_LOCK) != "1"
-            if lock_global:
-                s.merge(AppSetting(key=GLOBAL_LOCK, value="1", updated_at=now))
+            lock_user = False
+            distinct_ips = 0
+            target = s.get(User, user_id) if user_id is not None else None
+            if target is not None and target.locked_at is None:
+                u_since = (
+                    max(since, _aware(target.lock_cleared_at)) if target.lock_cleared_at else since
+                )
+                distinct_ips = s.scalar(
+                    select(func.count(func.distinct(LoginFailure.ip)))
+                    .where(LoginFailure.user_id == target.id, LoginFailure.created_at > u_since)
+                ) or 0
+                lock_user = distinct_ips >= IPS_TO_LOCK_USER
+                if lock_user:
+                    target.locked_at = now
         self.log.record("login_fail" if stage == "password" else "totp_fail", ip, detail)
         if block_ip:
             self.log.record("ip_blocked", ip, f"{ip_failures} falhas de login em 24h")
-        if lock_global:
-            self.log.record("global_lock", ip, f"falhas de {distinct_ips} IPs distintos em 24h")
+        if lock_user:
+            self.log.record("user_lock", ip, f"usuário {user_id} fechado: falhas de {distinct_ips} IPs em 24h")
 
     def unlock_ip(self, ip: str) -> bool:
         with self.sf.begin() as s:
@@ -155,15 +154,21 @@ class AuthService:
         self.log.record("unlock", ip, "desbloqueio manual do IP")
         return True
 
-    def unlock_global(self) -> bool:
+    def unlock_user(self, user_id: int) -> bool:
         now = self._now()
         with self.sf.begin() as s:
-            if self._setting(s, GLOBAL_LOCK) != "1":
+            user = s.get(User, user_id)
+            if user is None or user.locked_at is None:
                 return False
-            s.merge(AppSetting(key=GLOBAL_LOCK, value="0", updated_at=now))
-            s.merge(AppSetting(key=GLOBAL_UNLOCKED_AT, value=now.isoformat(), updated_at=now))
-        self.log.record("unlock", None, "desbloqueio manual do login global")
+            user.locked_at = None
+            user.lock_cleared_at = now
+        self.log.record("unlock", None, f"desbloqueio manual do usuário {user_id}")
         return True
+
+    def locked_users(self) -> list[tuple[int, str, datetime]]:
+        with self.sf() as s:
+            rows = s.scalars(select(User).where(User.locked_at.is_not(None)).order_by(User.id))
+            return [(u.id, u.email or u.username, _aware(u.locked_at)) for u in rows if u.locked_at]
 
     def blocks(self) -> list[tuple[str, str, datetime]]:
         with self.sf() as s:
@@ -172,23 +177,47 @@ class AuthService:
 
     # --- login ----------------------------------------------------------------
 
+    def find_user(self, login: str) -> int | None:
+        """A user by username or (case-insensitive) e-mail."""
+        with self.sf() as s:
+            user = s.scalars(select(User).where(User.username == login)).first() or s.scalars(
+                select(User).where(User.email == login.strip().lower())
+            ).first()
+            return user.id if user else None
+
     def password_step(self, username: str, password: str, ip: str) -> LoginStep:
         if self.check_open(ip) != "ok":
             return LoginStep(ok=False, user_id=None, blocked=True)
+        user_id = self.find_user(username)
         with self.sf() as s:
-            user = s.scalars(select(User).where(User.username == username)).first()
-            password_hash = user.password_hash if user else DUMMY_HASH
-            user_id = user.id if user else None
-        if user_id is None or not verify_password(password_hash, password):
-            self._fail(ip, "password", f"usuário {username[:64]!r}")
+            user = s.get(User, user_id) if user_id is not None else None
+            if user is not None and user.locked_at is not None:
+                return LoginStep(ok=False, user_id=None, blocked=True)
+            # Password login needs a password *and* an enrolled second factor:
+            # a password alone never starts a session or an enrollment.
+            usable = (
+                user is not None and user.password_hash is not None
+                and user.totp_secret_enc is not None
+            )
+            stored = user.password_hash if user is not None and user.password_hash else DUMMY_HASH
+        if not usable or not verify_password(stored, password):
+            self._fail(ip, "password", f"usuário {username[:64]!r}", user_id)
             return LoginStep(ok=False, user_id=None, blocked=self.check_open(ip) != "ok")
+        return LoginStep(ok=True, user_id=user_id, blocked=False)
+
+    def google_step(self, user_id: int) -> LoginStep:
+        """Google proved the identity; the second factor is still to come.
+
+        The callback does not see the client IP: the IP block is enforced by
+        the second-factor step that follows."""
+        if self.user_locked(user_id):
+            return LoginStep(ok=False, user_id=None, blocked=True)
         return LoginStep(ok=True, user_id=user_id, blocked=False)
 
     def _second_factor_ok(self, s: Session, user: User, code: str) -> bool:
         digits = code.strip().replace(" ", "")
         if digits.isdigit() and len(digits) == 6:
-            secret = decrypt(user.totp_secret_enc, self.settings.app_secret)
-            return pyotp.TOTP(secret).verify(digits, for_time=self._now(), valid_window=1)
+            return totp_matches(user, self.settings, digits, self._now())
         rc = s.scalars(
             select(RecoveryCode).where(
                 RecoveryCode.user_id == user.id,
@@ -202,14 +231,21 @@ class AuthService:
         return True
 
     def second_step(self, user_id: int, code: str, ip: str, user_agent: str) -> IssuedSession | None:
-        if self.check_open(ip) != "ok":
+        if self.check_open(ip) != "ok" or self.user_locked(user_id):
             return None
         with self.sf.begin() as s:
             user = s.get(User, user_id)
-            ok = user is not None and self._second_factor_ok(s, user, code)
+            ok = (
+                user is not None and user.totp_secret_enc is not None
+                and self._second_factor_ok(s, user, code)
+            )
         if not ok:
-            self._fail(ip, "totp", "segundo fator inválido")
+            self._fail(ip, "totp", "segundo fator inválido", user_id)
             return None
+        return self.start_session(user_id, ip, user_agent)
+
+    def start_session(self, user_id: int, ip: str, user_agent: str) -> IssuedSession:
+        """A session after the second factor (or right after enrolling it)."""
         with self.sf() as s:
             seen = s.scalar(
                 select(func.count()).select_from(SecurityEvent)

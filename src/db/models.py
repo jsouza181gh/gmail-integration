@@ -521,7 +521,7 @@ class LlmCallEmail(AccountOwned, Base):
     email_id: Mapped[str] = mapped_column(String(64), primary_key=True)
 
 
-# --- auth and security (single user) ------------------------------------------
+# --- auth and security ------------------------------------------
 
 class User(Base):
     __tablename__ = "users"
@@ -531,10 +531,30 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(Text, unique=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="member",
                                       server_default="member")
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    totp_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet(APP_SECRET)
+    google_sub: Mapped[str | None] = mapped_column(Text, unique=True)
+    # None: onboarding finished long ago (the pre-invite users); see src.auth.onboarding
+    onboarding_step: Mapped[str | None] = mapped_column(String(16))
+    password_hash: Mapped[str | None] = mapped_column(Text)  # optional: Google is the alternative
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text)  # Fernet(APP_SECRET); None until enrolled
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Lockout of this login target: failures from several IPs lock the user, not the whole site
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lock_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Invite(Base):
+    """Entry ticket: one per e-mail; the admin copies the link (the token is only kept hashed)."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # lowercase
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OAuthClient(Base):
@@ -627,6 +647,7 @@ class LoginFailure(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ip: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     stage: Mapped[str] = mapped_column(String(8), nullable=False)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)  # the target
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

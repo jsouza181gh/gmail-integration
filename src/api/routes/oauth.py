@@ -12,15 +12,18 @@ from src.db.accounts import account_for_user
 from src.gmail.accounts_store import account_email, save_connection
 from src.gmail.oauth import (
     GMAIL_MODIFY,
+    NONCE_COOKIE,
+    NONCE_PATH,
     GoogleIdentity,
     OAuthError,
     OAuthNotConfigured,
     OAuthState,
-    authorization_url,
     callback_for,
     exchange,
     read_state,
     register_callback,
+    same_browser,
+    start_flow,
 )
 from src.gmail.oauth_clients import platform_client
 from src.llm.types import Schema
@@ -40,10 +43,10 @@ def _redirect(deps: ApiDeps, path: str, result: str) -> Response:
 
 
 @router.post("/connect")
-def connect(user_id: int = Depends(require_user)) -> ConnectOut:
+def connect(response: Response, user_id: int = Depends(require_user)) -> ConnectOut:
     """Where to send the user to (re)connect their Gmail."""
     try:
-        return ConnectOut(url=authorization_url("connect", user_id=user_id, invite_token=None))
+        return ConnectOut(url=start_flow(response, "connect", user_id=user_id, invite_token=None))
     except OAuthNotConfigured as exc:
         raise HTTPException(503, "A conexão com o Google ainda não foi configurada.") from exc
 
@@ -88,6 +91,9 @@ def callback(
     page = GMAIL_PAGE if purpose == "connect" else "/"
     if error is not None or code is None:  # the user said no at Google
         return _redirect(deps, page, "cancelado")
+    if not same_browser(read_state(state), request.cookies.get(NONCE_COOKIE)):
+        log("oauth google: state de outro navegador (nonce não confere)")
+        return _redirect(deps, page, "erro")
     try:
         parsed, identity = exchange(code, state)
     except OAuthError as exc:
@@ -96,4 +102,6 @@ def callback(
     handler = callback_for(parsed.purpose)
     if handler is None:
         return _redirect(deps, page, "erro")
-    return handler(parsed, identity, deps)
+    resp = handler(parsed, identity, deps)
+    resp.delete_cookie(NONCE_COOKIE, path=NONCE_PATH, secure=True, httponly=True, samesite="lax")
+    return resp

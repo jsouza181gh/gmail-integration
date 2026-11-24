@@ -1,12 +1,19 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { useLocation, useNavigate } from 'react-router'
-import { login, secondFactor } from '../api/endpoints'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
+import { googleLogin, login, secondFactor } from '../api/endpoints'
 import { ApiError } from '../api/errors'
 import { qk } from '../api/hooks'
+import { navigateTo } from '../lib/nav'
 import { Icon } from '../ui/Icon'
 
 type Step = 'password' | 'code' | 'blocked'
+
+// What the server puts in ?erro= when a Google sign-in cannot go on.
+const GOOGLE_PROBLEMS: Record<string, string> = {
+  email_nao_verificado: 'O Google diz que esse e-mail ainda não foi confirmado.',
+  ja_tem_conta: 'Esse e-mail já tem conta. Entre com o Google ou com a sua senha.',
+}
 
 function destination(state: unknown): string {
   const from = (state as { from?: unknown } | null)?.from
@@ -17,13 +24,28 @@ export default function Login() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
-  const [step, setStep] = useState<Step>('password')
+  const [params] = useSearchParams()
+  const erro = params.get('erro') ?? ''
+  const [step, setStep] = useState<Step>(
+    erro === 'bloqueado' ? 'blocked' : params.get('etapa') === 'codigo' ? 'code' : 'password',
+  )
   const [recovery, setRecovery] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(GOOGLE_PROBLEMS[erro] ?? null)
   const [busy, setBusy] = useState(false)
+
+  const submitGoogle = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      navigateTo((await googleLogin()).url)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Algo deu errado.')
+      setBusy(false)
+    }
+  }
 
   const submitPassword = async (e: FormEvent) => {
     e.preventDefault()
@@ -73,7 +95,7 @@ export default function Login() {
         : 'Acesso bloqueado'
   const sub =
     step === 'password'
-      ? 'Painel pessoal. Acesso protegido por senha e código.'
+      ? 'Entre com o Google ou com a sua senha. O código do app autenticador é pedido sempre.'
       : step === 'code'
         ? recovery
           ? 'Digite um dos 10 códigos guardados. Cada um vale uma vez.'
@@ -95,6 +117,15 @@ export default function Login() {
 
         {step === 'password' ? (
           <form className="ia-card login__card" onSubmit={(e) => void submitPassword(e)}>
+            <button
+              type="button"
+              className="ia-btn ia-btn--primary"
+              disabled={busy}
+              onClick={() => void submitGoogle()}
+            >
+              Entrar com o Google
+            </button>
+            <p className="t-small ia-muted login__or">ou use a senha</p>
             <label className="ia-field">
               <span className="ia-label">Usuário</span>
               <span className="ia-input">
@@ -102,6 +133,7 @@ export default function Login() {
                   type="text"
                   autoComplete="username"
                   autoCapitalize="none"
+                  placeholder="usuário ou e-mail"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
@@ -122,7 +154,7 @@ export default function Login() {
               </span>
             </label>
             {error ? <ErrorLine text={error} /> : null}
-            <button className="ia-btn ia-btn--primary" type="submit" disabled={busy} style={{ width: '100%' }}>
+            <button className="ia-btn" type="submit" disabled={busy} style={{ width: '100%' }}>
               Continuar
             </button>
           </form>
@@ -169,10 +201,10 @@ export default function Login() {
               <Icon name="ban" size={28} />
             </span>
             <p className="h-heading" style={{ margin: 0 }}>
-              Login bloqueado para este IP
+              Login bloqueado
             </p>
             <p className="t-small ia-muted" style={{ margin: 0 }}>
-              Foram 3 tentativas erradas. O desbloqueio é feito no servidor.
+              Foram várias tentativas erradas. O desbloqueio é feito no servidor, por quem administra.
             </p>
           </div>
         ) : null}

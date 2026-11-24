@@ -288,8 +288,37 @@ export const GmailStatus = z.object({
 })
 export type GmailStatus = z.infer<typeof GmailStatus>
 
-export const Me = z.object({ username: str })
+// onboarding_done is true for users that predate the invites (no step stored).
+export const Me = z.object({
+  username: str,
+  role: str.default('member'),
+  onboarding_step: strN.default(null),
+  onboarding_done: z.boolean().default(true),
+})
 export type Me = z.infer<typeof Me>
+
+// --- entry and onboarding (src/api/routes/entry.py, onboarding.py) -------------
+export const InviteInfo = z.object({ email: str })
+export type InviteInfo = z.infer<typeof InviteInfo>
+
+export const GoogleUrl = z.object({ url: str })
+export type GoogleUrl = z.infer<typeof GoogleUrl>
+
+export const OnboardingState = z.object({
+  step: strN,
+  steps: z.array(str),
+  done: z.boolean(),
+  email: strN,
+  has_password: z.boolean(),
+  totp_confirmed: z.boolean(),
+})
+export type OnboardingState = z.infer<typeof OnboardingState>
+
+export const TotpStart = z.object({ secret: str, uri: str })
+export type TotpStart = z.infer<typeof TotpStart>
+
+export const RecoveryCodes = z.object({ codes: z.array(str) })
+export type RecoveryCodes = z.infer<typeof RecoveryCodes>
 
 export const Decision = z.object({ decided: int })
 export type Decision = z.infer<typeof Decision>

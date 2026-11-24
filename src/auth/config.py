@@ -17,6 +17,7 @@ class AuthSettings(Schema):
     access_ttl_s: int = 600
     refresh_ttl_s: int = 14 * 86400
     mfa_ttl_s: int = 300
+    onboarding_ttl_s: int = 3600
     download_ttl_s: int = 60
 
 

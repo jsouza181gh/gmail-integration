@@ -11,6 +11,7 @@ never reach Google.
 """
 import base64
 import hashlib
+import hmac
 import secrets
 import time
 from collections.abc import Callable
@@ -40,6 +41,10 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CALLBACK_PATH = "/api/oauth/google/callback"
 STATE_TTL_S = 600
+# Binds a state to the browser that started it (login CSRF): the nonce travels
+# both inside the sealed state and in this cookie, and the callback compares them.
+NONCE_COOKIE = "oauth_nonce"
+NONCE_PATH = "/api/oauth/google"
 
 # (url, form fields) -> (HTTP status, body)
 type HttpForm = Callable[[str, dict[str, str]], tuple[int, str]]
@@ -58,6 +63,7 @@ class OAuthState(BaseModel):
     user_id: int | None
     verifier: str
     invite_token: str | None
+    nonce: str = ""
     exp: int
 
 
@@ -137,13 +143,17 @@ def _challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
+def new_nonce() -> str:
+    return secrets.token_urlsafe(32)
+
+
 def authorization_url(
-    purpose: OAuthPurpose, *, user_id: int | None, invite_token: str | None
+    purpose: OAuthPurpose, *, user_id: int | None, invite_token: str | None, nonce: str = ""
 ) -> str:
     client = _client()
     verifier = secrets.token_urlsafe(64)
     state = OAuthState(
-        purpose=purpose, user_id=user_id, verifier=verifier, invite_token=invite_token,
+        purpose=purpose, user_id=user_id, verifier=verifier, invite_token=invite_token, nonce=nonce,
         exp=int(time.time()) + STATE_TTL_S,
     )
     login = purpose == "login"
@@ -162,6 +172,25 @@ def authorization_url(
         params["access_type"] = "offline"
         params["prompt"] = "consent"
     return f"{AUTH_URL}?{urlencode(params)}"
+
+
+def start_flow(
+    resp: Response, purpose: OAuthPurpose, *, user_id: int | None, invite_token: str | None
+) -> str:
+    """The Google URL for `purpose`, with its nonce cookie set on `resp`.
+
+    Lax, not strict: the callback is a top-level redirect from Google."""
+    nonce = new_nonce()
+    url = authorization_url(purpose, user_id=user_id, invite_token=invite_token, nonce=nonce)
+    resp.set_cookie(NONCE_COOKIE, nonce, max_age=STATE_TTL_S, path=NONCE_PATH,
+                    secure=True, httponly=True, samesite="lax")
+    return url
+
+
+def same_browser(state: OAuthState, cookie: str | None) -> bool:
+    return bool(state.nonce) and cookie is not None and hmac.compare_digest(
+        state.nonce.encode(), cookie.encode()
+    )
 
 
 def read_state(raw: str) -> OAuthState:

@@ -15,6 +15,24 @@ export const sessions = () => request('GET', '/api/auth/sessions', { schema: z.a
 export const revokeSession = (familyId: string) =>
   request('DELETE', `/api/auth/sessions/${enc(familyId)}`)
 
+// --- entry (no session yet) and onboarding ------------------------------
+export const inviteInfo = (token: string) =>
+  request('POST', '/api/entry/invite', { body: { token }, schema: s.InviteInfo })
+export const googleSignup = (token: string) =>
+  request('POST', '/api/entry/signup', { body: { token }, schema: s.GoogleUrl })
+export const googleLogin = () => request('POST', '/api/entry/login', { schema: s.GoogleUrl })
+export const onboardingState = () =>
+  request('GET', '/api/onboarding/state', { schema: s.OnboardingState })
+export const totpStart = () => request('POST', '/api/onboarding/totp/start', { schema: s.TotpStart })
+export const totpConfirm = (code: string) =>
+  request('POST', '/api/onboarding/totp/confirm', { body: { code }, schema: s.RecoveryCodes })
+export const recoveryAck = () => request('POST', '/api/onboarding/recovery/ack')
+export const setPassword = (password: string) =>
+  request('POST', '/api/onboarding/password', { body: { password } })
+export const skipPassword = () => request('POST', '/api/onboarding/password/skip')
+/** Same-origin image URL of the pending QR code (cookie-authenticated). */
+export const TOTP_QR_URL = '/api/onboarding/totp/qr.svg'
+
 // --- mail ---------------------------------------------------------------
 export interface EmailFilters {
   category?: string

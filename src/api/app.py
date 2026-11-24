@@ -137,15 +137,30 @@ def create_app(
     )
     app.middleware("http")(security_middleware(RateLimiter()))
     if api is not None:
+        from src.api.google_entry import register_entry_callbacks
         from src.api.routes import (
-            actions, agent, auth, chat, documents, gmail, mail, oauth, ops, security,
+            actions,
+            admin_invites,
+            agent,
+            auth,
+            chat,
+            documents,
+            entry,
+            gmail,
+            mail,
+            oauth,
+            onboarding,
+            ops,
+            security,
         )
         from src.gmail.oauth import configure as configure_oauth
 
         configure_oauth(api.sf, api.settings.origin)
+        register_entry_callbacks()
         app.state.deps = api
         app.add_middleware(AccountScopeMiddleware, resolve=account_resolver(api))
-        for module in (auth, mail, actions, documents, ops, security, agent, chat, gmail, oauth):
+        for module in (auth, entry, onboarding, admin_invites, mail, actions, documents, ops,
+                       security, agent, chat, gmail, oauth):
             app.include_router(module.router)
 
     @app.post("/webhooks/gmail")

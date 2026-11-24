@@ -14,7 +14,7 @@ from src.db.models import GmailAccount
 from src.db.scope import system_scope
 from src.gmail import oauth
 from src.gmail.accounts_store import account_id_by_email, mark_status
-from src.gmail.oauth import GMAIL_SCOPES, authorization_url
+from src.gmail.oauth import GMAIL_SCOPES, NONCE_COOKIE, authorization_url
 from src.gmail.oauth_clients import upsert_client
 from src.platform.secrets import unseal
 from src.services.sync import SyncCoordinators
@@ -44,8 +44,10 @@ class Panel:
         self.api.login()
         self.client = self.api.client
 
-    def state(self) -> str:
-        url = authorization_url("connect", user_id=1, invite_token=None)
+    def state(self, nonce: str = "browser-nonce") -> str:
+        """A state bound to this browser: the nonce is also in its cookie."""
+        url = authorization_url("connect", user_id=1, invite_token=None, nonce=nonce)
+        self.client.cookies.set(NONCE_COOKIE, "browser-nonce")
         return parse_qs(urlparse(url).query)["state"][0]
 
     def callback(self, **params: str) -> tuple[int, str]:
@@ -146,6 +148,28 @@ def test_callback_without_refresh_token_or_gmail_permission(
     assert account(session_factory).refresh_token_enc is None
 
 
+def test_callback_refuses_a_state_started_in_another_browser(
+    session_factory: sessionmaker[Session], panel: Panel
+) -> None:
+    """Login CSRF: a state minted for someone else's browser is refused."""
+    mark_status(session_factory, 1, "revoked", "invalid_grant")
+    assert panel.callback(code="c", state=panel.state(nonce="attacker"))[1].endswith("gmail=erro")
+    state = panel.state()
+    panel.client.cookies.clear()
+    assert panel.callback(code="c", state=state)[1].endswith("gmail=erro")
+    assert account(session_factory).refresh_token_enc is None and panel.google.calls == []
+
+
+def test_connect_sets_the_nonce_cookie_of_its_state(panel: Panel) -> None:
+    r = panel.client.post("/api/oauth/google/connect")
+    cookie = r.headers["set-cookie"]
+    assert cookie.startswith(f"{NONCE_COOKIE}=") and "HttpOnly" in cookie
+    assert "Path=/api/oauth/google" in cookie and "SameSite=lax" in cookie
+    nonce = cookie.split(";")[0].split("=", 1)[1]
+    state = oauth.read_state(parse_qs(urlparse(r.json()["url"]).query)["state"][0])
+    assert state.nonce == nonce and len(nonce) >= 32
+
+
 def test_callback_when_the_user_says_no_or_the_state_is_bad(panel: Panel) -> None:
     assert panel.callback(error="access_denied", state=panel.state())[1].endswith("gmail=cancelado")
     assert panel.callback(code="c", state="forged")[1].endswith("/?oauth=erro")
@@ -155,8 +179,12 @@ def test_callback_when_the_user_says_no_or_the_state_is_bad(panel: Panel) -> Non
     assert panel.google.calls  # the fake, never Google, was asked
 
 
-def test_callback_for_a_purpose_without_handler_fails_softly(panel: Panel) -> None:
-    url = authorization_url("login", user_id=None, invite_token=None)
+def test_callback_for_a_purpose_without_handler_fails_softly(
+    panel: Panel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delitem(oauth._callbacks, "login", raising=False)  # phase 3 registers one
+    url = authorization_url("login", user_id=None, invite_token=None, nonce="browser-nonce")
+    panel.client.cookies.set(NONCE_COOKIE, "browser-nonce")
     state = parse_qs(urlparse(url).query)["state"][0]
     assert panel.callback(code="c", state=state)[1].endswith("/?oauth=erro")
 
@@ -172,7 +200,8 @@ def test_callback_dispatches_to_registered_handler(panel: Panel) -> None:
 
     oauth.register_callback("login", handler)
     try:
-        url = authorization_url("login", user_id=None, invite_token=None)
+        url = authorization_url("login", user_id=None, invite_token=None, nonce="browser-nonce")
+        panel.client.cookies.set(NONCE_COOKIE, "browser-nonce")
         state = parse_qs(urlparse(url).query)["state"][0]
         r = panel.client.get("/api/oauth/google/callback", params={"code": "c", "state": state})
         assert (r.status_code, r.text, seen) == (200, "ok", ["login:me@example.com"])

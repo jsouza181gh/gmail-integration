@@ -35,7 +35,9 @@ def test_full_login_flow_sets_cookie_flags(api: Api) -> None:
     assert all(f in access for f in ("HttpOnly", "Secure", "SameSite=strict", "Path=/api", "Max-Age=600"))
     assert all(f in refresh for f in ("HttpOnly", "Secure", "SameSite=strict", "Path=/api/auth"))
     assert "HttpOnly" not in csrf and "Secure" in csrf and "Path=/" in csrf
-    assert c.get("/api/auth/me").json() == {"username": "joao"}
+    assert c.get("/api/auth/me").json() == {
+        "username": "joao", "role": "admin", "onboarding_step": None, "onboarding_done": True,
+    }
 
 
 def test_wrong_password_401_then_blocked_423(api: Api) -> None:

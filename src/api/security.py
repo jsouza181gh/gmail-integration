@@ -15,7 +15,10 @@ from fastapi.responses import JSONResponse
 from src.api.deps import CSRF_COOKIE, CSRF_HEADER, get_deps
 
 WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-NO_SESSION_WRITES = frozenset({"/api/auth/login", "/api/auth/2fa"})  # Origin only
+NO_SESSION_WRITES = frozenset({  # Origin only: there is no session yet
+    "/api/auth/login", "/api/auth/2fa",
+    "/api/entry/invite", "/api/entry/signup", "/api/entry/login",
+})
 AUTH_PREFIX = "/api/auth/"
 DEFAULT_LIMIT = 60
 AUTH_LIMIT = 10

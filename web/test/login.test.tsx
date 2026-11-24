@@ -71,7 +71,7 @@ test('locked_ip_shows_blocked_card', async () => {
   const user = userEvent.setup()
   renderApp('/login')
   await fillPassword(user)
-  expect(await screen.findByText('Login bloqueado para este IP')).toBeInTheDocument()
+  expect(await screen.findByText('Login bloqueado')).toBeInTheDocument()
   expect(screen.getByText(/O desbloqueio é feito no servidor/)).toBeInTheDocument()
 })
 
