@@ -801,3 +801,16 @@ class ChatCardItem(AccountOwned, Base):
     email_id: Mapped[str | None] = mapped_column(String(64))
     action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
     attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))
+
+
+class UserLlmKey(Base):
+    """A user's own Gemini key(s), sealed (`src.platform.secrets.seal`). Platform
+    table (not account-owned): read through `src.llm.keys`, never by content code."""
+
+    __tablename__ = "user_llm_keys"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    app_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    backfill_key_enc: Mapped[str | None] = mapped_column(Text)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
