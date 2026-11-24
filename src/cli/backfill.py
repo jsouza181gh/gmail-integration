@@ -19,7 +19,8 @@ from src.db.store import Store  # noqa: E402
 from src.indexing.backfill import BackfillProgress  # noqa: E402
 from src.indexing.wiring import Indexing  # noqa: E402
 from src.jobs.store import JobStore  # noqa: E402
-from src.llm.config import build_backfill_gateway  # noqa: E402
+from src.llm.accounts import AccountLLMs  # noqa: E402
+from src.llm.config import env_account_keys  # noqa: E402
 
 
 def render(p: BackfillProgress) -> str:
@@ -47,7 +48,9 @@ def main(argv: list[str] | None = None) -> None:
     try:
         with cli_account(store.sf, args.account):
             jobs = JobStore(store.sf)
-            backfill = Indexing(store, jobs, build_backfill_gateway()).backfill
+            backfill = Indexing(
+                store, jobs, AccountLLMs(store.sf, inline_wait_s=None, env_keys=env_account_keys).backfill
+            ).backfill
             progress = backfill.start() if args.cmd == "start" else backfill.progress()
             print(render(progress))
     finally:

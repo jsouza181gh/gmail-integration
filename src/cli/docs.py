@@ -54,10 +54,12 @@ def download(
 
 
 def search(store: IndexStore, query: str, k: int) -> str:
-    from src.llm.config import build_gateway
+    from src.llm.accounts import AccountLLMs
+    from src.llm.config import env_account_keys
     from src.llm.types import EmbedInput
 
-    vec = build_gateway().embed([EmbedInput(text=query)], purpose="search", task="RETRIEVAL_QUERY")
+    llms = AccountLLMs(store.sf, inline_wait_s=None, env_keys=env_account_keys)
+    vec = llms.app.embed([EmbedInput(text=query)], purpose="search", task="RETRIEVAL_QUERY")
     hits = store.search(vec.vectors[0], k)
     return "\n".join(f"{h.score:.3f} {h.kind:<10} {h.id:<20} {h.title[:100]}" for h in hits) or "nada"
 

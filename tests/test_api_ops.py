@@ -11,12 +11,14 @@ from src.db.models import (
     Job,
     LlmCall,
     Notification,
+    UserLlmKey,
     RunEmail,
 )
 from src.indexing.backfill import RUN_QUERY
 from src.indexing.store import IndexStore
 from src.jobs.types import BackfillPageJob, ProcessEmailJob
-from tests.api_fakes import Api
+from src.llm.keys import save_keys
+from tests.api_fakes import SETTINGS, Api
 from tests.fakes import FakeService
 
 
@@ -26,8 +28,10 @@ def gmail() -> FakeService:
 
 
 @pytest.fixture
-def api(session_factory: sessionmaker[Session]) -> Api:
+def api(session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch) -> Api:
+    monkeypatch.setenv("APP_SECRET", SETTINGS.app_secret)
     a = Api(session_factory, gmail=gmail)
+    save_keys(session_factory, 1, app_key="app-key", backfill_key=None)  # the user's own key
     a.login()
     return a
 
@@ -161,13 +165,20 @@ def test_backfill_resume_restarts_a_dead_chain(api: Api) -> None:
         assert s.scalar(select(func.count()).select_from(Job).where(Job.kind == "backfill_page")) == 1
 
 
-def test_backfill_turbo_toggle(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_backfill_turbo_toggle(api: Api) -> None:
     c = api.client
-    monkeypatch.delenv("GOOGLE_API_KEY_BACKFILL", raising=False)
     status = c.get("/api/backfill").json()
     assert status["turbo"] is False and status["turbo_available"] is False
-    monkeypatch.setenv("GOOGLE_API_KEY", "app-key")
-    monkeypatch.setenv("GOOGLE_API_KEY_BACKFILL", "bf-key")
+    save_keys(api.sf, 1, app_key="app-key", backfill_key="bf-key")
+    api.deps.llm_keys.invalidate(1)
     on = c.post("/api/backfill/turbo", json={"on": True})
     assert on.status_code == 200 and on.json()["turbo"] is True and on.json()["turbo_available"] is True
     assert c.post("/api/backfill/turbo", json={"on": False}).json()["turbo"] is False
+
+
+def test_backfill_start_needs_the_users_own_key(api: Api) -> None:
+    with api.sf.begin() as s:
+        s.query(UserLlmKey).delete()
+    api.deps.llm_keys.invalidate(1)
+    r = api.client.post("/api/backfill/start")
+    assert r.status_code == 409 and "chave" in r.json()["detail"]

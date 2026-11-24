@@ -3,6 +3,7 @@ import os
 from collections.abc import Callable
 from typing import Literal
 
+from src.llm.keys import AccountKeys
 from src.llm.gateway import DEFAULT_EMBED_MODEL, LLMGateway, chat_client_factory
 from src.llm.types import CallRecorder, Schema
 
@@ -63,6 +64,7 @@ def build_gateway(
     recorder: CallRecorder | None = None,
     mode_source: Callable[[], Literal["free", "fast"]] | None = None,
     key: str | None = None,
+    max_wait_s: float | None = None,
 ) -> LLMGateway:
     """The app's gateway (triage, new mail, chat search) on the app key."""
     cfg = load_llm_config()
@@ -75,6 +77,7 @@ def build_gateway(
         mode_source=mode_source,
         recorder=recorder,
         api_key=key or load_keys().app or None,
+        max_wait_s=max_wait_s,
     )
 
 
@@ -98,6 +101,7 @@ def build_chat_gateway(
     recorder: CallRecorder | None = None,
     mode_source: Callable[[], Literal["free", "fast"]] | None = None,
     key: str | None = None,
+    max_wait_s: float | None = None,
 ) -> LLMGateway:
     """The chat's own gateway: its own pacing and quota memory, so a busy
     triage never delays an answer and vice versa."""
@@ -112,4 +116,14 @@ def build_chat_gateway(
         recorder=recorder,
         chat_factory=chat_client_factory(CHAT_TIMEOUT_S, key or load_keys().app or None),
         call_timeout_s=CHAT_TIMEOUT_S,
+        max_wait_s=max_wait_s,
     )
+
+
+def env_account_keys() -> AccountKeys | None:
+    """The `.env` keys as one account's keys (None when GOOGLE_API_KEY is unset).
+    Only the admin account may fall back to them, until they are imported."""
+    keys = load_keys()
+    if not keys.app:
+        return None
+    return AccountKeys(app=keys.app, backfill=keys.backfill if keys.separate else None)

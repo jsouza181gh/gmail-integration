@@ -128,6 +128,9 @@ def create_app(
         app.add_middleware(AccountScopeMiddleware, resolve=account_resolver(api))
         for module in (auth, mail, actions, documents, ops, security, agent, chat):
             app.include_router(module.router)
+        from src.api.routes import llm_key
+
+        app.include_router(llm_key.router)
 
     @app.post("/webhooks/gmail")
     async def gmail_webhook(request: Request, background: BackgroundTasks) -> Response:

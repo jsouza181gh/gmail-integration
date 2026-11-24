@@ -16,7 +16,7 @@ from src.db.rows import AgentStepRow
 from src.db.scope import current_account
 from src.indexing.backfill import PAGE_SIZE, PAUSED_REASON, RUN_QUERY, BackfillProgress
 from src.jobs.types import BackfillPageJob, DeadJob, JobCounts
-from src.llm.config import load_keys
+from src.llm.errors import NoLLMKeyError
 from src.llm.types import Schema
 from src.utils.console import log
 
@@ -170,7 +170,7 @@ def _status(deps: ApiDeps) -> BackfillStatus:
         deferred_until=next_at if next_at is not None and next_at > now else None,
         paused=RuntimeSettings(deps.sf).backfill_paused(),
         turbo=RuntimeSettings(deps.sf).backfill_turbo(),
-        turbo_available=load_keys().separate,
+        turbo_available=_has_separate_key(deps),
     )
 
 
@@ -179,7 +179,18 @@ def backfill(request: Request) -> BackfillStatus:
     return _status(get_deps(request))
 
 
+def _has_separate_key(deps: ApiDeps) -> bool:
+    try:
+        return deps.llm_keys.keys(current_account()).separate
+    except NoLLMKeyError:
+        return False
+
+
 def _start(deps: ApiDeps) -> None:
+    try:
+        deps.llm_keys.keys(current_account())
+    except NoLLMKeyError as exc:  # the history needs the user's own Gemini key
+        raise HTTPException(409, str(exc)) from exc
     run = deps.index_store.backfill_run(RUN_QUERY)
     if not run.fetch_done:
         deps.jobs.enqueue(BackfillPageJob(run_id=run.id, page_no=run.pages))
