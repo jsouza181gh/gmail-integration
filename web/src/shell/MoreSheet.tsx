@@ -9,6 +9,7 @@ const LINKS: Array<{ to: string; label: string; icon: IconName }> = [
   { to: '/agente', label: 'Agente', icon: 'bot' },
   { to: '/execucoes', label: 'Execuções', icon: 'activity' },
   { to: '/seguranca', label: 'Segurança', icon: 'shield' },
+  { to: '/conta', label: 'Conta', icon: 'logout' },
 ]
 
 export function MoreSheet({ onClose, onSignOut }: { onClose: () => void; onSignOut: () => void }) {

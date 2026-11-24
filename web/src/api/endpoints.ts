@@ -163,3 +163,14 @@ export const confirmCard = (cardId: number, opts: ConfirmOptions = {}) =>
 export const cancelCard = (cardId: number) =>
   request('POST', `/api/chat/cards/${cardId}/cancel`, { schema: s.ChatCard })
 export const messageAudioUrl = (messageId: number) => `/api/chat/messages/${messageId}/audio`
+
+// --- account (leaving) --------------------------------------------------
+export const account = () => request('GET', '/api/account', { schema: s.AccountInfo })
+export const disconnectGmail = () => request('POST', '/api/account/disconnect')
+export interface DeleteAccountBody {
+  email: string
+  password?: string
+  code?: string
+}
+export const deleteAccount = (body: DeleteAccountBody) =>
+  request('POST', '/api/account/delete', { body })

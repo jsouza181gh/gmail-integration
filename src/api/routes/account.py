@@ -80,7 +80,8 @@ def delete(
                                       body.code[:64] if body.code else None, ip):
         if deps.auth.check_open(ip) != "ok":
             raise HTTPException(423, "login bloqueado")
-        raise HTTPException(401, "senha ou código inválido")
+        # not 401: the panel client would refresh and retry, doubling the failure count
+        raise HTTPException(403, "senha ou código inválido")
     try:
         delete_account(deps.sf, clients, user_id)
     except AccountProtected as exc:

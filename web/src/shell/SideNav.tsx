@@ -20,6 +20,7 @@ export const SYSTEM_ITEMS: NavItem[] = [
   { to: '/agente', label: 'Agente', icon: 'bot' },
   { to: '/execucoes', label: 'Execuções', icon: 'activity' },
   { to: '/seguranca', label: 'Segurança', icon: 'shield' },
+  { to: '/conta', label: 'Conta', icon: 'logout' },
 ]
 
 function Item({ item, count }: { item: NavItem; count?: number }) {

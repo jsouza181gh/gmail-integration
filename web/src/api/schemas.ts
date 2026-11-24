@@ -363,3 +363,11 @@ export type ChatMessage = z.infer<typeof ChatMessage>
 
 export const Turn = z.object({ user: ChatMessage, assistant: ChatMessage })
 export type Turn = z.infer<typeof Turn>
+
+export const AccountInfo = z.object({
+  email: str,
+  status: str,
+  can_delete: z.boolean(),
+  backup_copies: int,
+})
+export type AccountInfo = z.infer<typeof AccountInfo>

@@ -7,6 +7,7 @@ import Documentos from './pages/Documentos'
 import Execucoes from './pages/Execucoes'
 import Login from './pages/Login'
 import Relevantes from './pages/Relevantes'
+import Conta from './pages/Conta'
 import Seguranca from './pages/Seguranca'
 import { RequireAuth } from './shell/RequireAuth'
 
@@ -24,6 +25,7 @@ export function AppRoutes() {
         <Route path="agente" element={<Agente />} />
         <Route path="execucoes" element={<Execucoes />} />
         <Route path="seguranca" element={<Seguranca />} />
+        <Route path="conta" element={<Conta />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

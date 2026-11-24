@@ -86,7 +86,7 @@ def test_delete_needs_reconfirmation(session_factory: sessionmaker[Session], goo
     api = _api(session_factory)
     wrong = api.client.post("/api/account/delete", json={"email": EMAIL, "password": "errada-errada"})
     none = api.client.post("/api/account/delete", json={"email": EMAIL})
-    assert (wrong.status_code, none.status_code) == (401, 401)
+    assert (wrong.status_code, none.status_code) == (403, 403)
     assert google == []
     with system_scope(), session_factory() as s:
         assert s.get(User, 1) is not None

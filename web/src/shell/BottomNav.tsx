@@ -8,7 +8,7 @@ const ITEMS: Array<{ to: string; label: string; icon: IconName; end?: boolean }>
   { to: '/documentos', label: 'Docs', icon: 'filetext' },
 ]
 
-const SYSTEM_PATHS = ['/chat', '/agente', '/execucoes', '/seguranca']
+const SYSTEM_PATHS = ['/chat', '/agente', '/execucoes', '/seguranca', '/conta']
 
 export function BottomNav({ pending, onMore }: { pending: number; onMore: () => void }) {
   const { pathname } = useLocation()
