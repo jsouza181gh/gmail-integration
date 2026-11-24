@@ -5,7 +5,7 @@ is left" checks cover it without anyone remembering to extend a fixture.
 """
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Boolean, LargeBinary, Column, Connection, DateTime, Float, Integer, Table, func, select
+from sqlalchemy import BigInteger, Boolean, LargeBinary, Connection, DateTime, Float, Integer, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.accounts.exit import account_tables, user_tables
@@ -21,8 +21,7 @@ OVERRIDES: dict[str, dict[str, str | None]] = {
 }
 
 
-def _value(table: Table, col: Column[object], tag: str) -> object:
-    ctype = col.type
+def _value(ctype: object, label: str) -> object:
     if isinstance(ctype, Vector):
         return (0.0,) * EMBED_DIM
     if isinstance(ctype, LargeBinary):
@@ -35,13 +34,14 @@ def _value(table: Table, col: Column[object], tag: str) -> object:
         return 1
     if isinstance(ctype, Float):
         return 0.0
-    return f"{tag}-{table.name}-{col.name}"[: getattr(ctype, "length", None) or 200]
+    return label[: getattr(ctype, "length", None) or 200]
 
 
-def seed_rows(conn: Connection, table: Table, fixed: dict[str, int], tag: str,
+def seed_rows(conn: Connection, name: str, fixed: dict[str, int], tag: str,
               keys: dict[tuple[str, str, str], object]) -> None:
     """One row in `table`; `fixed` pins gmail_account_id / user_id; FK columns take
     the parent row's value recorded in `keys` for the same `tag`."""
+    table = Base.metadata.tables[name]
     values: dict[str, object] = {}
     for col in table.c:
         if col.name in fixed:
@@ -61,8 +61,9 @@ def seed_rows(conn: Connection, table: Table, fixed: dict[str, int], tag: str,
         elif col.nullable or col.default is not None or col.server_default is not None:
             continue
         else:
-            values[col.name] = _value(table, col, tag)
+            values[col.name] = _value(col.type, f"{tag}-{table.name}-{col.name}")
     result = conn.execute(table.insert().values(**values))
+    assert result.inserted_primary_key is not None
     for col, pk in zip(table.primary_key.columns, result.inserted_primary_key, strict=True):
         keys[(table.name, col.name, tag)] = pk
 
@@ -77,10 +78,10 @@ def seed_account(sf: sessionmaker[Session], account_id: int, user_id: int) -> No
     with system_scope(), sf.begin() as s:
         conn = s.connection()
         for table in Base.metadata.sorted_tables:
-            if table in user_tables():
-                seed_rows(conn, table, {"user_id": user_id}, tag, keys)
-            elif table in account_tables():
-                seed_rows(conn, table, {"gmail_account_id": account_id}, tag, keys)
+            if table.name in user_tables():
+                seed_rows(conn, table.name, {"user_id": user_id}, tag, keys)
+            elif table.name in account_tables():
+                seed_rows(conn, table.name, {"gmail_account_id": account_id}, tag, keys)
 
 
 def rows_of(sf: sessionmaker[Session], account_id: int, user_id: int) -> dict[str, int]:
@@ -88,9 +89,9 @@ def rows_of(sf: sessionmaker[Session], account_id: int, user_id: int) -> dict[st
     counts: dict[str, int] = {}
     with system_scope(), sf() as s:
         for table in Base.metadata.sorted_tables:
-            if table in account_tables():
+            if table.name in account_tables():
                 where = table.c.gmail_account_id == account_id
-            elif table in user_tables():
+            elif table.name in user_tables():
                 where = table.c.user_id == user_id
             elif table.name == "gmail_accounts":
                 where = table.c.id == account_id

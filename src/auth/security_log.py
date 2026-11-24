@@ -15,6 +15,7 @@ from src.utils.console import log
 SecurityKind = Literal[
     "login_ok", "login_fail", "totp_fail", "ip_blocked", "global_lock", "refresh_reuse",
     "login_new_ip", "logout", "session_revoked", "csrf_invalid", "download", "unlock",
+    "account_deleted", "account_disconnected",
 ]
 DETAIL_MAX = 1000
 

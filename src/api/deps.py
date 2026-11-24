@@ -17,6 +17,7 @@ from src.auth.security_log import Alerter, SecurityLog
 from src.auth.service import AuthService
 from src.chat.cards import CardService
 from src.chat.store import ChatStore
+from src.gmail.clients import GmailClients
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
 
@@ -60,6 +61,7 @@ class ApiDeps:
         chat: ChatStore,
         cards: CardService,
         stream: "StreamTiming",
+        clients: GmailClients | None = None,
     ) -> None:
         self.sf = sf
         self.settings = settings
@@ -73,6 +75,7 @@ class ApiDeps:
         self.chat = chat
         self.cards = cards
         self.stream = stream
+        self.clients = clients  # fase 2: one Gmail service per account
 
     @classmethod
     def build(
@@ -84,6 +87,7 @@ class ApiDeps:
         gmail: Callable[[], Resource] = _no_gmail,
         clock: Callable[[], datetime] = _utcnow,
         stream: "StreamTiming | None" = None,
+        clients: GmailClients | None = None,
     ) -> "ApiDeps":
         log = SecurityLog(sf, alerts, clock)
         jobs = JobStore(sf)
@@ -112,6 +116,7 @@ class ApiDeps:
             chat=chat,
             cards=cards,
             stream=stream or StreamTiming(),
+            clients=clients,
         )
 
 

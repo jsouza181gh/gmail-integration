@@ -64,19 +64,19 @@ def two(session_factory: sessionmaker[Session], second_account: int) -> sessionm
 
 def test_account_tables_cover_every_table_with_gmail_account_id() -> None:
     expected = {t.name for t in Base.metadata.tables.values() if "gmail_account_id" in t.c}
-    assert {t.name for t in account_tables()} == expected
+    assert set(account_tables()) == expected
     assert {"emails", "jobs", "account_settings", "gmail_labels", "chat_cards"} <= expected
 
 
 def test_user_tables_cover_every_table_pointing_at_users() -> None:
-    names = {t.name for t in user_tables()}
+    names = set(user_tables())
     assert {"auth_sessions", "recovery_codes"} <= names
 
 
 def test_seed_really_filled_every_table(two: sessionmaker[Session]) -> None:
     filled = rows_of(two, 1, 1)
-    for table in [*account_tables(), *user_tables()]:
-        assert table.name in filled, f"{table.name} not seeded"
+    for name in [*account_tables(), *user_tables()]:
+        assert name in filled, f"{name} not seeded"
 
 
 def test_delete_leaves_nothing_of_a_and_b_untouched(

@@ -51,6 +51,8 @@ const SECURITY_KINDS: Record<string, SecurityKindInfo> = {
   csrf_invalid: { label: 'CSRF recusado', icon: 'ban', tone: 'danger' },
   download: { label: 'download', icon: 'download', tone: 'info' },
   unlock: { label: 'desbloqueio', icon: 'lock', tone: 'neutral' },
+  account_deleted: { label: 'conta excluída', icon: 'ban', tone: 'warning' },
+  account_disconnected: { label: 'Gmail desconectado', icon: 'logout', tone: 'neutral' },
 }
 
 export function securityKind(kind: string): SecurityKindInfo {

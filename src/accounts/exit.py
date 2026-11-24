@@ -12,7 +12,7 @@ their data.
 """
 from collections.abc import Callable
 
-from sqlalchemy import Table, delete, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.accounts import account_for_user
@@ -31,19 +31,19 @@ class AccountProtected(RuntimeError):
     """The admin account cannot be deleted through the panel."""
 
 
-def account_tables() -> list[Table]:
-    """Every table with rows of one Gmail account, children before parents."""
+def account_tables() -> list[str]:
+    """Names of every table with rows of one Gmail account, children before parents."""
     return [
-        t for t in reversed(Base.metadata.sorted_tables)
+        t.name for t in reversed(Base.metadata.sorted_tables)
         if "gmail_account_id" in t.c
     ]
 
 
-def user_tables() -> list[Table]:
-    """Platform tables whose rows hang from a user (sessions, recovery codes...)."""
+def user_tables() -> list[str]:
+    """Names of the platform tables whose rows hang from a user (sessions, recovery codes...)."""
     users = Base.metadata.tables["users"]
     return [
-        t for t in reversed(Base.metadata.sorted_tables)
+        t.name for t in reversed(Base.metadata.sorted_tables)
         if t is not users and any(fk.column.table is users for fk in t.foreign_keys)
     ]
 
@@ -78,10 +78,12 @@ def delete_account(sf: sessionmaker[Session], clients: GmailClients, user_id: in
         _release_google(sf, clients, account_id)
     with system_scope(), sf.begin() as s:
         if account_id is not None:
-            for table in account_tables():
+            for name in account_tables():
+                table = Base.metadata.tables[name]
                 s.execute(delete(table).where(table.c.gmail_account_id == account_id))
             s.execute(delete(GmailAccount).where(GmailAccount.id == account_id))
-        for table in user_tables():
+        for name in user_tables():
+            table = Base.metadata.tables[name]
             s.execute(delete(table).where(table.c.user_id == user_id))
         s.execute(delete(User).where(User.id == user_id))
     log(f"conta {account_id} (usuário {user_id}) excluída")
