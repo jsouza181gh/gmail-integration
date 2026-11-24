@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.classification.seed import V1
 from src.db.models import (
     AgentConfig,
@@ -97,7 +98,7 @@ def test_reclassify(api: Api) -> None:
     assert r.status_code == 204
     assert c.post("/api/emails/e1/reclassify", json={"category": "Inventada"}).status_code == 422
     with api.sf() as s:
-        assert s.get_one(Email, "e1").category == "Compras"
+        assert s.get_one(Email, email_key("e1")).category == "Compras"
         fb = s.scalars(select(Feedback)).one()
         kb = s.scalars(select(KbEntry).where(KbEntry.scope == "classification")).one()
     assert (fb.verdict, fb.source, fb.email_id) == ("reclassify", "ui", "e1")

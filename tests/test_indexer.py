@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.db.models import Attachment, Email, EmailEmbedding, Job
 from src.db.vector import EMBED_DIM
 from src.indexing.indexer import Indexer, candidate
@@ -71,7 +72,7 @@ def test_index_saves_body_attachments_and_embeds_once(session_factory: sessionma
     assert emb.calls[0][0].text.startswith("De: Loja <a@x.com>\nAssunto: assunto a\n")
     assert "Segue o boleto" in emb.calls[0][0].text
     with session_factory() as s:
-        a = s.get_one(Email, "a")
+        a = s.get_one(Email, email_key("a"))
         atts = {x.filename: x for x in s.scalars(select(Attachment))}
         kinds = sorted(s.scalars(select(Job.kind)))
         assert s.scalars(select(EmailEmbedding.email_id)).all() == ["a", "b", "c"]
@@ -112,7 +113,7 @@ def test_message_gone_is_skipped(session_factory: sessionmaker[Session]) -> None
     out = idx.index(["a", "b"], run_id=None)
     assert (out.gone, out.indexed) == (1, 1)
     with session_factory() as s:
-        assert s.get_one(Email, "a").index_error == "gone"
+        assert s.get_one(Email, email_key("a")).index_error == "gone"
     assert idx.index(["a"], run_id=None).gone == 0  # not fetched again
 
 
@@ -122,13 +123,13 @@ def test_system_mail_never_ingested(session_factory: sessionmaker[Session]) -> N
     out = idx.index(["s"], run_id=None)
     assert (out.system, out.indexed) == (1, 0)
     with session_factory() as s:
-        assert s.get(Email, "s") is None
+        assert s.get(Email, email_key("s")) is None
 
 
 def test_quota_exhausted_defers(session_factory: sessionmaker[Session]) -> None:
     emb = FakeEmbedder(fail=LLMExhaustedError("429", kinds=("rate",)))
     idx, _ = make(session_factory, service(mail()), emb)
-    job = ClaimedJob(id=1, attempts=1, payload=IndexEmailJob(email_id="b"))
+    job = ClaimedJob(id=1, account_id=1, attempts=1, payload=IndexEmailJob(email_id="b"))
     with pytest.raises(Deferred):
         idx.handle(job)
 
@@ -137,7 +138,7 @@ def test_other_exhaustion_fails_normally(session_factory: sessionmaker[Session])
     emb = FakeEmbedder(fail=LLMExhaustedError("bad", kinds=("bad_output",)))
     idx, _ = make(session_factory, service(mail()), emb)
     with pytest.raises(LLMExhaustedError):
-        idx.handle(ClaimedJob(id=1, attempts=1, payload=IndexEmailJob(email_id="b")))
+        idx.handle(ClaimedJob(id=1, account_id=1, attempts=1, payload=IndexEmailJob(email_id="b")))
 
 
 @pytest.mark.parametrize(("mime", "name", "size", "inline", "reason"), [

@@ -92,6 +92,7 @@ def idempotency_key(payload: AnyJob) -> str:
 
 class ClaimedJob(Schema):
     id: int
+    account_id: int  # the Gmail account the job runs for
     attempts: int
     payload: JobPayload
 

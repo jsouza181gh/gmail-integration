@@ -18,8 +18,11 @@ from pydantic import BaseModel, ConfigDict
 from src.api.deps import ApiDeps
 from src.api.log_filters import install_access_log_filter
 from src.api.pubsub_auth import PubSubVerifier
+from src.api.scope import AccountScopeMiddleware, ResolveAccount
 from src.api.security import RateLimiter, security_middleware
 from src.api.static import mount_web
+from src.auth.crypto import read_access
+from src.db.accounts import account_for_user
 from src.utils.console import log
 
 
@@ -63,6 +66,16 @@ async def _renew_loop(renew: Callable[[], None], interval_s: float, retry_s: flo
         except Exception as exc:  # noqa: BLE001
             log(f"renovação do watch falhou: {type(exc).__name__}: {exc}")
             delay = retry_s
+
+
+def account_resolver(api: ApiDeps) -> ResolveAccount:
+    """Access cookie -> the user's Gmail account (None: not logged in)."""
+
+    def resolve(token: str) -> int | None:
+        user_id = read_access(token, api.settings, api.clock())
+        return account_for_user(api.sf, user_id) if user_id is not None else None
+
+    return resolve
 
 
 def create_app(
@@ -112,6 +125,7 @@ def create_app(
         from src.api.routes import actions, agent, auth, chat, documents, mail, ops, security
 
         app.state.deps = api
+        app.add_middleware(AccountScopeMiddleware, resolve=account_resolver(api))
         for module in (auth, mail, actions, documents, ops, security, agent, chat):
             app.include_router(module.router)
 
@@ -144,6 +158,8 @@ def build_app() -> FastAPI:
 
     load_dotenv()
 
+    from src.db.accounts import connected_account_ids
+    from src.db.scope import account_scope
     from src.db.store import Store
     from src.gmail.client import get_gmail_service
     from src.gmail.watch import ensure_watch
@@ -163,17 +179,32 @@ def build_app() -> FastAPI:
 
     def run_sync() -> None:
         # googleapiclient services are not thread-safe: one per sync run.
-        try:
-            sync_inbox(store, get_gmail_service(), jobs)
-        except Exception as exc:
-            syncs.failure(f"{type(exc).__name__}: {exc}")
-            raise
+        # Every connected account syncs in its own scope; routing a push to its
+        # account (emailAddress) comes with per-account Gmail credentials.
+        errors: list[str] = []
+        for account in connected_account_ids(store.sf):
+            with account_scope(account):
+                try:
+                    sync_inbox(store, get_gmail_service(), jobs)
+                except Exception as exc:  # noqa: BLE001 - one account must not stop the rest
+                    errors.append(f"conta {account}: {type(exc).__name__}: {exc}")
+        if errors:
+            syncs.failure("; ".join(errors))
+            raise RuntimeError("; ".join(errors))
         syncs.success()
 
     coordinator = SyncCoordinator(run_sync)
 
     def start_watch() -> None:
-        ensure_watch(store, get_gmail_service())
+        errors: list[str] = []
+        for account in connected_account_ids(store.sf):
+            with account_scope(account):
+                try:
+                    ensure_watch(store, get_gmail_service())
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"conta {account}: {type(exc).__name__}: {exc}")
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     def renew_and_sync() -> None:
         try:

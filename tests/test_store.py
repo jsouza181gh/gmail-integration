@@ -2,6 +2,7 @@ from datetime import date
 
 import pytest
 
+from src.db.scope import email_key
 from src.classification.classifier import Classification
 from src.db.store import Store
 from src.gmail.messages import MessageSummary
@@ -104,6 +105,6 @@ def test_ingest_promotes_chat_row_to_inbox(store):
     store.ingest(run.id, ["sp"], [])
 
     with store.sf() as s:
-        row = s.get(Email, "sp")
+        row = s.get(Email, email_key("sp"))
         assert row is not None
         assert (row.source, row.sender, row.subject) == ("inbox", "spam@x", "oferta")

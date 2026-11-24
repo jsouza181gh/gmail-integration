@@ -4,6 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.db.scope import install_scoping
+
 
 def get_database_url() -> str:
     url = os.getenv("DATABASE_URL")
@@ -26,4 +28,6 @@ def make_session_factory(url: str | None = None) -> sessionmaker[Session]:
         )
     else:
         engine = create_engine(url, pool_pre_ping=True)
-    return sessionmaker(engine, expire_on_commit=False)
+    sf = sessionmaker(engine, expire_on_commit=False)
+    install_scoping(sf)
+    return sf

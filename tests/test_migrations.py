@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, inspect, text
 from src.db.models import Base
 
 TABLES = {
-    "runs", "emails", "run_emails", "watch_state",
+    "runs", "emails", "run_emails", "gmail_accounts", "account_settings",
     "category_sets", "category_flags", "categories", "category_examples",
     "kb_entries", "llm_calls", "llm_call_messages", "llm_call_emails",
     "jobs", "agent_configs", "agent_runs", "agent_steps",
@@ -27,11 +27,13 @@ EMAIL_COLUMNS = {
 }
 
 
-def _upgraded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Config, str]:
+def _upgraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rev: str = "head"
+) -> tuple[Config, str]:
     url = f"sqlite:///{tmp_path / 't.db'}"
     monkeypatch.setenv("DATABASE_URL", url)
     cfg = Config("alembic.ini")
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, rev)
     return cfg, url
 
 
@@ -67,10 +69,19 @@ def test_no_json_columns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert json_cols == []
 
 
+def _not_test_table(obj: object, name: str | None, kind: str, _r: bool, _c: object) -> bool:
+    table = getattr(obj, "table", obj) if kind != "table" else obj
+    return not str(getattr(table, "name", name)).startswith("test_")
+
+
 def test_models_match_migrations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, url = _upgraded(tmp_path, monkeypatch)
     with create_engine(url).connect() as conn:
-        diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+        # test_* tables are test-only models (tests/test_scope.py), never migrated
+        ctx = MigrationContext.configure(
+            conn, opts={"include_object": _not_test_table}
+        )
+        diff = compare_metadata(ctx, Base.metadata)
     assert diff == []
 
 

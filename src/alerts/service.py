@@ -18,8 +18,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.agent.ports import Labeler
-from src.db.store import Store
+from src.db.accounts import admin_account_id
 from src.db.models import Notification
+from src.db.scope import account_scope
+from src.db.store import Store
 from src.gmail.messages import SYSTEM_HEADER
 from src.jobs.types import ClaimedJob
 from src.jobs.worker import Handler
@@ -85,10 +87,14 @@ class AlertService:
         session_factory: sessionmaker[Session],
         sender: MailSender,
         clock: Callable[[], datetime] = _utcnow,
+        account: Callable[[], int | None] | None = None,
     ) -> None:
+        """Alerts are operational: they go to (and are logged in) the admin's
+        account, whatever account the caller is running for."""
         self.sf = session_factory
         self.sender = sender
         self._now = clock
+        self._account = account or (lambda: admin_account_id(session_factory))
 
     def _window(self, kind: AlertKind, now: datetime) -> tuple[bool, int]:
         """(inside the suppression window?, suppressed since the last send)."""
@@ -115,6 +121,14 @@ class AlertService:
         return False, suppressed or 0
 
     def alert(self, kind: AlertKind, subject: str, body: str) -> AlertOutcome:
+        account = self._account()
+        if account is None:
+            log(f"alerta {kind} sem conta de admin: {subject}")
+            return "failed"
+        with account_scope(account):
+            return self._alert(kind, subject, body)
+
+    def _alert(self, kind: AlertKind, subject: str, body: str) -> AlertOutcome:
         now = self._now()
         inside, suppressed = self._window(kind, now)
         outcome: AlertOutcome

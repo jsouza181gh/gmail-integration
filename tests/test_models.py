@@ -1,6 +1,7 @@
 import pytest
 
-from src.db.models import Email, Run, RunEmail, WatchState
+from src.db.models import Email, Run, RunEmail
+from src.db.scope import email_key
 
 
 def test_tables_created(session_factory):
@@ -9,16 +10,14 @@ def test_tables_created(session_factory):
         s.add(Email(id="a"))
         s.flush()
         s.add(RunEmail(run_id=1, email_id="a"))
-        s.add(WatchState(id=1, email_address="x@y", history_id="10", expiration=1))
 
     with session_factory() as s:
         run = s.get(Run, 1)
         assert run.query == "q"
         assert run.pages == 0
         assert run.fetch_done is False
-        assert s.get(Email, "a").attempts == 0
+        assert s.get(Email, email_key("a")).attempts == 0
         assert s.get(RunEmail, (1, "a")).added_at is not None
-        assert s.get(WatchState, 1).history_id == "10"
 
 
 def test_get_database_url_requires_env(monkeypatch):
@@ -39,7 +38,7 @@ def test_vector_roundtrip_sqlite(session_factory):
         s.flush()
         s.add(EmailEmbedding(email_id="v", model="m", embedding=vec))
     with session_factory() as s:
-        got = s.get_one(EmailEmbedding, "v").embedding
+        got = s.get_one(EmailEmbedding, email_key("v")).embedding
     assert len(got) == EMBED_DIM
     assert all(abs(a - b) < 1e-6 for a, b in zip(got, vec, strict=True))
 

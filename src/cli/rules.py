@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from dotenv import load_dotenv
 
 from src.agent.rules import RuleAdmin
+from src.cli.account import add_account_arg, cli_account
 from src.db.rows import RuleRow
 
 Out = Callable[[str], None]
@@ -48,12 +49,14 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--category")
     add.add_argument("--subject")
     add.add_argument("--action", required=True)
-    sub.add_parser("list")
+    ls = sub.add_parser("list")
     promote = sub.add_parser("promote")
     promote.add_argument("--id", type=int, required=True)
     promote.add_argument("--yes", action="store_true")
     disable = sub.add_parser("disable")
     disable.add_argument("--id", type=int, required=True)
+    for sp in (add, ls, promote, disable):
+        add_account_arg(sp)
     return p
 
 
@@ -65,12 +68,17 @@ def main(
     ask: Ask = input,
 ) -> int:
     args = _parser().parse_args(argv)
-    if admin is None:
-        load_dotenv()
-        from src.db.store import Store
+    if admin is not None:
+        return _dispatch(args, admin, out, ask)
+    load_dotenv()
+    from src.db.store import Store
 
-        admin = RuleAdmin(Store().sf)
+    sf = Store().sf
+    with cli_account(sf, args.account):
+        return _dispatch(args, RuleAdmin(sf), out, ask)
 
+
+def _dispatch(args: argparse.Namespace, admin: RuleAdmin, out: Out, ask: Ask) -> int:
     try:
         if args.cmd == "add":
             rid = admin.add(

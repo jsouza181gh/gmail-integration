@@ -1,5 +1,6 @@
 """/api/backfill, /api/runs, /api/jobs, /api/usage: what the system is doing."""
 import threading
+import weakref
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,6 +13,7 @@ from src.api import queries
 from src.api.deps import ApiDeps, get_deps, require_user
 from src.db.models import AgentRun, Job, LlmCall
 from src.db.rows import AgentStepRow
+from src.db.scope import current_account
 from src.indexing.backfill import PAGE_SIZE, PAUSED_REASON, RUN_QUERY, BackfillProgress
 from src.jobs.types import BackfillPageJob, DeadJob, JobCounts
 from src.llm.config import load_keys
@@ -79,18 +81,19 @@ class _Profile(BaseModel):
 
 
 class _ProfileCache:
-    """Mailbox size from Gmail, cached: it only feeds a percentage."""
+    """Mailbox size from Gmail, cached per account: it only feeds a percentage."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._value: int | None = None
-        self._at: datetime | None = None
+        self._entries: dict[int, tuple[datetime, int | None]] = {}
 
     def total(self, deps: ApiDeps) -> int | None:
         now = deps.clock()
+        account = current_account()
         with self._lock:
-            if self._at is not None and now - self._at < PROFILE_TTL:
-                return self._value
+            hit = self._entries.get(account)
+            if hit is not None and now - hit[0] < PROFILE_TTL:
+                return hit[1]
         try:
             raw = deps.gmail().users().getProfile(userId="me").execute(num_retries=2)
             value: int | None = _Profile.model_validate(raw).messagesTotal
@@ -98,11 +101,19 @@ class _ProfileCache:
             log(f"getProfile falhou: {type(exc).__name__}: {exc}")
             value = None
         with self._lock:
-            self._value, self._at = value, now
+            self._entries[account] = (now, value)
         return value
 
 
-_profile = _ProfileCache()
+# one cache per running app (its deps), keyed inside by account
+_profiles: "weakref.WeakKeyDictionary[ApiDeps, _ProfileCache]" = weakref.WeakKeyDictionary()
+
+
+def _profile_total(deps: ApiDeps) -> int | None:
+    cache = _profiles.get(deps)
+    if cache is None:
+        cache = _profiles.setdefault(deps, _ProfileCache())
+    return cache.total(deps)
 
 
 def _progress(deps: ApiDeps) -> BackfillProgress:
@@ -139,7 +150,7 @@ def _status(deps: ApiDeps) -> BackfillStatus:
                 or_(Job.last_error.is_(None), Job.last_error != PAUSED_REASON),
             )
         )
-    total = _profile.total(deps)
+    total = _profile_total(deps)
     percent = None
     eta = None
     if total:
@@ -256,7 +267,10 @@ def jobs(request: Request, limit: int = Query(50, ge=1, le=500)) -> JobsOut:
 
 @router.post("/jobs/{job_id}/requeue", status_code=204)
 def requeue(job_id: int, request: Request) -> None:
-    if not get_deps(request).jobs.requeue(job_id):
+    jobs = get_deps(request).jobs
+    if not jobs.exists(job_id):
+        raise HTTPException(404, "job não encontrado")
+    if not jobs.requeue(job_id):
         raise HTTPException(409, "o job não está morto")
 
 

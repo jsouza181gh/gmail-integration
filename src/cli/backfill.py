@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.cli.account import add_account_arg, cli_account  # noqa: E402
 from src.db.store import Store  # noqa: E402
 from src.indexing.backfill import BackfillProgress  # noqa: E402
 from src.indexing.wiring import Indexing  # noqa: E402
@@ -40,13 +41,15 @@ def main(argv: list[str] | None = None) -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("cmd", choices=["start", "status"])
+    add_account_arg(parser)
     args = parser.parse_args(argv)
     store = Store()
     try:
-        jobs = JobStore(store.sf)
-        backfill = Indexing(store, jobs, build_backfill_gateway()).backfill
-        progress = backfill.start() if args.cmd == "start" else backfill.progress()
-        print(render(progress))
+        with cli_account(store.sf, args.account):
+            jobs = JobStore(store.sf)
+            backfill = Indexing(store, jobs, build_backfill_gateway()).backfill
+            progress = backfill.start() if args.cmd == "start" else backfill.progress()
+            print(render(progress))
     finally:
         store.close()
     sys.exit(0)

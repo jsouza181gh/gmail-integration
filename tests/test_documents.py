@@ -185,7 +185,7 @@ def setup(sf: sessionmaker[Session], data: bytes, mime: str = "application/pdf",
 
 
 def job(att_id: int, attempts: int = 1) -> ClaimedJob:
-    return ClaimedJob(id=1, attempts=attempts, payload=IndexAttachmentJob(attachment_id=att_id))
+    return ClaimedJob(id=1, account_id=1, attempts=attempts, payload=IndexAttachmentJob(attachment_id=att_id))
 
 
 def row(sf: sessionmaker[Session], att_id: int) -> Attachment:
@@ -303,5 +303,5 @@ def test_backfill_attachment_job_is_analyzed(session_factory: sessionmaker[Sessi
     svc, att_id = setup(session_factory, text_pdf(LONG))
     DocumentIndexer(IndexStore(session_factory), FakeLLM([analysis()]), lambda: svc,
                     max_attempts=5).handle(
-        ClaimedJob(id=1, attempts=1, payload=BackfillAttachmentJob(attachment_id=att_id)))
+        ClaimedJob(id=1, account_id=1, attempts=1, payload=BackfillAttachmentJob(attachment_id=att_id)))
     assert row(session_factory, att_id).status == "done"

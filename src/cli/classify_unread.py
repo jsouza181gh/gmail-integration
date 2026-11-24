@@ -9,6 +9,7 @@ from src.classification.classifier import (
     Classifier,
     classify_pending,
 )
+from src.cli.account import cli_account
 from src.db.rows import EmailRow, RunRow
 from src.db.store import Store
 from src.gmail.client import get_gmail_service
@@ -104,36 +105,40 @@ def build_classifier(store: Store) -> Classifier:
     return Classifier(store, build_gateway(DbCallRecorder(store.sf)))
 
 
-def run(query: str = DEFAULT_QUERY, reset: bool = False, max_pages: int | None = None) -> int:
+def run(
+    query: str = DEFAULT_QUERY, reset: bool = False, max_pages: int | None = None,
+    account: str | None = None,
+) -> int:
     store = Store()
     try:
-        current = store.get_or_create_run(query, force_new=reset)
-        run_id = current.id
-        log(
-            f"run #{run_id} ({'retomando' if current.pages else 'nova'}): "
-            f"{current.pages} páginas já buscadas, "
-            f"{store.count_pending(run_id)} pendentes"
-        )
+        with cli_account(store.sf, account):
+            current = store.get_or_create_run(query, force_new=reset)
+            run_id = current.id
+            log(
+                f"run #{run_id} ({'retomando' if current.pages else 'nova'}): "
+                f"{current.pages} páginas já buscadas, "
+                f"{store.count_pending(run_id)} pendentes"
+            )
 
-        service = get_gmail_service()
-        classifier = build_classifier(store)
-        pages_this_session = 0
+            service = get_gmail_service()
+            classifier = build_classifier(store)
+            pages_this_session = 0
 
-        classify_pending(store, classifier, run_id)
-        while True:
-            current = store.get_run(run_id)
-            if current.fetch_done:
-                break
-            if max_pages is not None and pages_this_session >= max_pages:
-                log(f"limite de {max_pages} páginas; rode de novo para continuar")
-                break
-            fetch_page(store, service, current)
-            pages_this_session += 1
             classify_pending(store, classifier, run_id)
+            while True:
+                current = store.get_run(run_id)
+                if current.fetch_done:
+                    break
+                if max_pages is not None and pages_this_session >= max_pages:
+                    log(f"limite de {max_pages} páginas; rode de novo para continuar")
+                    break
+                fetch_page(store, service, current)
+                pages_this_session += 1
+                classify_pending(store, classifier, run_id)
 
-        if store.get_run(run_id).fetch_done and not store.count_pending(run_id):
-            print_report(store, run_id)
-        return 0
+            if store.get_run(run_id).fetch_done and not store.count_pending(run_id):
+                print_report(store, run_id)
+            return 0
     except Abort as exc:
         log(f"ABORTADO: {exc}")
         return 1

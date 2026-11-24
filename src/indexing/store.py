@@ -10,6 +10,7 @@ from typing import Literal
 from sqlalchemy import ColumnElement, Float, cast, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.db.models import Attachment, Email, EmailEmbedding, Run, RunEmail
 from src.db.rows import AttachmentRow, EmailRow, RunRow
 from src.db.vector import Vector
@@ -101,7 +102,7 @@ class IndexStore:
         """
         sm = full.summary
         with self.sf.begin() as s:
-            email = s.get(Email, sm.id)
+            email = s.get(Email, email_key(sm.id))
             if email is None:
                 email = Email(
                     id=sm.id, sender=sm.sender, subject=sm.subject, date=sm.date,
@@ -138,7 +139,7 @@ class IndexStore:
     def mark_gone(self, email_id: str) -> bool:
         """The message no longer exists in Gmail; False if we never had it."""
         with self.sf.begin() as s:
-            email = s.get(Email, email_id)
+            email = s.get(Email, email_key(email_id))
             if email is None:
                 return False
             email.index_error = "gone"
@@ -168,7 +169,7 @@ class IndexStore:
     ) -> None:
         with self.sf.begin() as s:
             for email_id, vec in vectors.items():
-                row = s.get(EmailEmbedding, email_id)
+                row = s.get(EmailEmbedding, email_key(email_id))
                 if row is None:
                     s.add(EmailEmbedding(email_id=email_id, model=model, embedding=vec))
                 else:
@@ -183,7 +184,7 @@ class IndexStore:
 
     def email_header(self, email_id: str) -> EmailHeader:
         with self.sf() as s:
-            e = s.get(Email, email_id)
+            e = s.get(Email, email_key(email_id))
             return EmailHeader(sender=e.sender if e else None, subject=e.subject if e else None)
 
     def skip_attachment(self, attachment_id: int, reason: str) -> None:

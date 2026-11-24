@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.db.scope import email_key
 from src.agent.ports import MailReader
 from src.agent.types import DocHit, MailHit, MailItem
 from src.db.models import Attachment, Email
@@ -88,12 +89,12 @@ class DbEmailLookup:
 
     def email(self, email_id: str) -> EmailRow | None:
         with self.sf() as s:
-            row = s.get(Email, email_id)
+            row = s.get(Email, email_key(email_id))
             return None if row is None else EmailRow.model_validate(row)
 
     def body(self, email_id: str) -> str | None:
         with self.sf() as s:
-            row = s.get(Email, email_id)
+            row = s.get(Email, email_key(email_id))
             return row.body if row is not None and row.body else None
 
     def ensure(self, email_id: str) -> EmailRow | None:
@@ -105,7 +106,7 @@ class DbEmailLookup:
 
     def remember(self, item: MailItem) -> EmailRow:
         with self.sf.begin() as s:
-            row = s.get(Email, item.id)
+            row = s.get(Email, email_key(item.id))
             if row is None:
                 row = Email(id=item.id, sender=item.sender, subject=item.subject,
                             date=item.date, snippet=item.snippet,

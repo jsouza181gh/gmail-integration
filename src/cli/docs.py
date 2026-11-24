@@ -17,6 +17,7 @@ from googleapiclient.discovery import Resource
 
 load_dotenv()
 
+from src.cli.account import add_account_arg, cli_account  # noqa: E402
 from src.gmail.full import fetch_attachment  # noqa: E402
 from src.indexing.store import IndexStore  # noqa: E402
 from src.utils.console import log  # noqa: E402
@@ -76,21 +77,24 @@ def main(argv: list[str] | None = None) -> None:
     p_get = sub.add_parser("get")
     p_get.add_argument("attachment_id", type=int)
     p_get.add_argument("--out", type=Path, required=True)
+    for sp in (p_search, p_list, p_get):
+        add_account_arg(sp)
     args = parser.parse_args(argv)
 
     from src.db.store import Store
 
     db = Store()
     try:
-        store = IndexStore(db.sf)
-        if args.cmd == "search":
-            print(search(store, args.query, args.k))
-        elif args.cmd == "list":
-            print(list_documents(store, args.doc_class, args.doc_type, args.limit))
-        else:
-            from src.gmail.client import get_gmail_service
+        with cli_account(db.sf, args.account):
+            store = IndexStore(db.sf)
+            if args.cmd == "search":
+                print(search(store, args.query, args.k))
+            elif args.cmd == "list":
+                print(list_documents(store, args.doc_class, args.doc_type, args.limit))
+            else:
+                from src.gmail.client import get_gmail_service
 
-            print(download(store, get_gmail_service, args.attachment_id, args.out))
+                print(download(store, get_gmail_service, args.attachment_id, args.out))
     finally:
         db.close()
     sys.exit(0)

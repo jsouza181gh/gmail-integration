@@ -22,7 +22,7 @@ def pg() -> sessionmaker[Session]:
         s.execute(text("DELETE FROM jobs"))
         s.execute(text("DELETE FROM emails WHERE id LIKE 'pgtest-%'"))
         for i in ("pgtest-a", "pgtest-b"):
-            s.execute(text("INSERT INTO emails (id, attempts) VALUES (:i, 0)"), {"i": i})
+            s.execute(text("INSERT INTO emails (gmail_account_id, id, attempts) VALUES (1, :i, 0)"), {"i": i})
     return sf
 
 
@@ -54,11 +54,13 @@ def test_two_lanes_skip_locked(pg: sessionmaker[Session]) -> None:
         s.execute(text("DELETE FROM chat_messages"))
         s.execute(text("DELETE FROM chat_conversations"))
         conv = s.execute(text(
-            "INSERT INTO chat_conversations (created_at, updated_at) VALUES (:n, :n) RETURNING id"
+            "INSERT INTO chat_conversations (gmail_account_id, created_at, updated_at)"
+            " VALUES (1, :n, :n) RETURNING id"
         ), {"n": now}).scalar_one()
         msg = s.execute(text(
-            "INSERT INTO chat_messages (conversation_id, role, text, input, status, created_at,"
-            " updated_at) VALUES (:c, 'assistant', '', 'text', 'queued', :n, :n) RETURNING id"
+            "INSERT INTO chat_messages (gmail_account_id, conversation_id, role, text, input,"
+            " status, created_at, updated_at)"
+            " VALUES (1, :c, 'assistant', '', 'text', 'queued', :n, :n) RETURNING id"
         ), {"c": conv, "n": now}).scalar_one()
     jobs = JobStore(pg)
     jobs.enqueue(ProcessEmailJob(email_id="pgtest-a"))

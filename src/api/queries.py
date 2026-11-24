@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 
+from src.db.scope import email_key
 from src.db.models import AgentRun, Attachment, Email, SuggestedAction
 from src.llm.types import Schema
 
@@ -230,7 +231,7 @@ def actions(
 
 
 def email_detail(s: Session, email_id: str, today: date) -> EmailDetail | None:
-    e = s.get(Email, email_id)
+    e = s.get(Email, email_key(email_id))
     if e is None:
         return None
     atts = s.scalars(select(Attachment).where(Attachment.email_id == email_id).order_by(Attachment.id))
