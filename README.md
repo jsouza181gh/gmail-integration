@@ -42,6 +42,8 @@ Se `secrets/token.json` não existir, a API sobe mesmo assim e loga o erro do wa
 
 > Se o dono de `secrets/` no host não for UID 1000, defina `APP_UID`/`APP_GID` no `.env` (`id -u`, `id -g`); senão a API não lê o `token.json`.
 
+> **Chaves do Gemini (uma por usuário).** Cada usuário cadastra a própria chave no onboarding (`POST /api/onboarding/llm-key`); os gateways e a memória de cota são por chave. Até as chaves do `.env` serem importadas, só a conta admin as usa (com aviso no log). Depois do deploy: `docker compose exec worker python -m src.cli.import_env_keys --account <e-mail>`; depois disso `GOOGLE_API_KEY[_BACKFILL]` pode sair do `.env`.
+
 > A API roda com **1 worker** de propósito: o lock do sync e o agendador de renovação vivem no processo.
 
 ## Deploy automático (GitHub Actions)

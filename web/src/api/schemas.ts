@@ -167,6 +167,15 @@ export const BackfillStatus = z.object({
 })
 export type BackfillStatus = z.infer<typeof BackfillStatus>
 
+export const LlmKeyStatus = z.object({
+  configured: z.boolean(),
+  has_backfill_key: z.boolean(),
+  validated_at: strN,
+  last_error: strN,
+  next_step: strN,
+})
+export type LlmKeyStatus = z.infer<typeof LlmKeyStatus>
+
 export const UsageDay = z.object({
   day: str,
   purpose: str,

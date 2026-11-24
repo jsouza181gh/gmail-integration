@@ -15,6 +15,15 @@ export const sessions = () => request('GET', '/api/auth/sessions', { schema: z.a
 export const revokeSession = (familyId: string) =>
   request('DELETE', `/api/auth/sessions/${enc(familyId)}`)
 
+// --- onboarding: the user's own Gemini key -------------------------------
+export const llmKeyStatus = () =>
+  request('GET', '/api/onboarding/llm-key', { schema: s.LlmKeyStatus })
+export const saveLlmKey = (appKey: string, backfillKey?: string) =>
+  request('POST', '/api/onboarding/llm-key', {
+    body: { app_key: appKey, ...(backfillKey ? { backfill_key: backfillKey } : {}) },
+    schema: s.LlmKeyStatus,
+  })
+
 // --- mail ---------------------------------------------------------------
 export interface EmailFilters {
   category?: string
