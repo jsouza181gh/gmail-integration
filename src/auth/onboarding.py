@@ -36,6 +36,10 @@ class OnboardingError(ValueError):
     """The action does not fit the step the user is on; the message is for the user."""
 
 
+class WrongCode(OnboardingError):
+    """The authenticator code did not match."""
+
+
 class OnboardingState(Schema):
     step: str | None
     steps: list[str]
@@ -135,7 +139,7 @@ class Onboarding:
             user = self._user(s, user_id)
             self._need(user, "totp")
             if not totp_matches(user, self.settings, code, self._now()):
-                raise OnboardingError("Esse código não confere. Confira o app e tente de novo.")
+                raise WrongCode("Esse código não confere. Confira o app e tente de novo.")
             return issue_recovery_codes(s, user_id)
 
     def acknowledge_recovery(self, user_id: int) -> str:

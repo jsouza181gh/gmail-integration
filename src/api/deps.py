@@ -2,7 +2,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from googleapiclient.discovery import Resource
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -12,17 +12,20 @@ from src.agent.kb import KbAdmin
 from src.agent.policy import PolicyAdmin, PolicyResolver
 from src.agent.rules import RuleAdmin, RuleEngine
 from src.auth.config import AuthSettings
-from src.auth.crypto import read_access
+from src.auth.crypto import read_access, read_onboarding
+from src.auth.onboarding import Onboarding
 from src.auth.security_log import Alerter, SecurityLog
 from src.auth.service import AuthService
 from src.chat.cards import CardService
 from src.chat.store import ChatStore
+from src.db.models import User
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
 
 ACCESS_COOKIE = "access"
 REFRESH_COOKIE = "refresh"
 MFA_COOKIE = "mfa"
+ONB_COOKIE = "onb"
 CSRF_COOKIE = "csrf"
 CSRF_HEADER = "X-CSRF-Token"
 
@@ -51,6 +54,7 @@ class ApiDeps:
         sf: sessionmaker[Session],
         settings: AuthSettings,
         auth: AuthService,
+        onboarding: Onboarding,
         log: SecurityLog,
         jobs: JobStore,
         approvals: ApprovalService,
@@ -64,6 +68,7 @@ class ApiDeps:
         self.sf = sf
         self.settings = settings
         self.auth = auth
+        self.onboarding = onboarding
         self.log = log
         self.jobs = jobs
         self.approvals = approvals
@@ -103,6 +108,7 @@ class ApiDeps:
             sf=sf,
             settings=settings,
             auth=AuthService(sf, settings, log, clock),
+            onboarding=Onboarding(sf, settings, clock),
             log=log,
             jobs=jobs,
             approvals=approvals,
@@ -126,6 +132,29 @@ def require_user(request: Request) -> int:
     deps = get_deps(request)
     token = request.cookies.get(ACCESS_COOKIE)
     user_id = read_access(token, deps.settings, deps.clock()) if token else None
+    if user_id is None:
+        raise HTTPException(401, "sessão expirada")
+    return user_id
+
+
+def require_admin(request: Request, user_id: int = Depends(require_user)) -> int:
+    with get_deps(request).sf() as s:
+        user = s.get(User, user_id)
+        if user is None or user.role != "admin":
+            raise HTTPException(403, "só o administrador")
+    return user_id
+
+
+def onboarding_user(request: Request) -> int:
+    """The user of an onboarding call: a full session, or the Google-proof
+    cookie that only opens /api/onboarding."""
+    deps = get_deps(request)
+    now = deps.clock()
+    token = request.cookies.get(ACCESS_COOKIE)
+    user_id = read_access(token, deps.settings, now) if token else None
+    if user_id is None:
+        onb = request.cookies.get(ONB_COOKIE)
+        user_id = read_onboarding(onb, deps.settings, now) if onb else None
     if user_id is None:
         raise HTTPException(401, "sessão expirada")
     return user_id
