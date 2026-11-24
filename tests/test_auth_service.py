@@ -15,8 +15,8 @@ from src.auth.crypto import (
 )
 from src.auth.security_log import SecurityLog
 from src.auth.service import AuthService
-from src.cli.create_user import create_user
 from src.db.models import SecurityEvent, User
+from tests.auth_fakes import make_user, secret_of
 
 SETTINGS = AuthSettings(
     jwt_secret="j" * 40,
@@ -60,8 +60,9 @@ def alerts() -> Alerts:
 
 @pytest.fixture
 def world(session_factory: sessionmaker[Session], clock: Clock, alerts: Alerts) -> tuple[AuthService, str, list[str]]:
-    enrollment = create_user(session_factory, SETTINGS, "joao", PASSWORD, reset=False, clock=clock)
-    secret = pyotp.parse_uri(enrollment.otpauth_uri).secret
+    enrollment = make_user(session_factory, SETTINGS, "joao", PASSWORD, email="joao@example.com",
+                           role="admin", clock=clock)
+    secret = secret_of(enrollment)
     svc = AuthService(session_factory, SETTINGS, SecurityLog(session_factory, alerts, clock), clock)
     return svc, secret, list(enrollment.recovery_codes)
 
@@ -125,13 +126,48 @@ def test_unknown_user_counts_too(world) -> None:  # noqa: ANN001
     assert svc.check_open("6.6.6.7") == "ip_blocked"
 
 
-def test_failures_from_three_ips_lock_globally(world, clock, alerts) -> None:  # noqa: ANN001
+def test_failures_from_three_ips_lock_that_user_only(world, clock, alerts, session_factory) -> None:  # noqa: ANN001
     svc, secret, _ = world
+    other = make_user(session_factory, SETTINGS, "ana", PASSWORD, email="ana@example.com", clock=clock)
     for ip in ("2.2.2.2", "3.3.3.3", "4.4.4.4"):
         svc.password_step("joao", "errada", ip)
-    assert svc.check_open("1.1.1.1") == "global_lock"
-    assert not svc.password_step("joao", PASSWORD, "1.1.1.1").ok
-    assert "global_lock" in alerts.sent
+    assert svc.user_locked(1) and not svc.user_locked(2)
+    assert svc.check_open("1.1.1.1") == "ok"  # no IP is blocked: the site stays open
+    step = svc.password_step("joao", PASSWORD, "1.1.1.1")
+    assert (step.ok, step.blocked) == (False, True)
+    assert svc.password_step("ana", PASSWORD, "1.1.1.1").ok  # other users keep logging in
+    assert svc.second_step(1, totp(secret, clock), "1.1.1.1", "ua") is None  # even past the password
+    assert svc.second_step(2, totp(secret_of(other), clock), "1.1.1.1", "ua") is not None
+    assert "global_lock" in alerts.sent and "user_lock" in events(session_factory)
+    assert svc.locked_users()[0][:2] == (1, "joao@example.com")
+
+
+def test_failures_against_different_users_do_not_add_up(world, clock, session_factory) -> None:  # noqa: ANN001
+    svc, _, _ = world
+    make_user(session_factory, SETTINGS, "ana", PASSWORD, email="ana@example.com", clock=clock)
+    make_user(session_factory, SETTINGS, "bia", PASSWORD, email="bia@example.com", clock=clock)
+    for ip, who in (("2.2.2.2", "joao"), ("3.3.3.3", "ana"), ("4.4.4.4", "bia")):
+        svc.password_step(who, "errada", ip)
+    assert not any(svc.user_locked(i) for i in (1, 2, 3))
+
+
+def test_google_step_respects_the_user_lock(world, clock) -> None:  # noqa: ANN001
+    svc, _, _ = world
+    assert svc.google_step(1).ok
+    for ip in ("2.2.2.2", "3.3.3.3", "4.4.4.4"):
+        svc.password_step("joao", "errada", ip)
+    assert svc.google_step(1).blocked
+
+
+def test_login_by_email_and_no_password_or_totp_means_no_password_login(world, clock, session_factory) -> None:  # noqa: ANN001
+    svc, _, _ = world
+    assert svc.password_step("Joao@Example.com", PASSWORD, "1.1.1.1").ok
+    make_user(session_factory, SETTINGS, "nopass", None, email="nopass@example.com", clock=clock)
+    make_user(session_factory, SETTINGS, "nototp", PASSWORD, email="nototp@example.com", totp=False,
+              clock=clock)
+    assert not svc.password_step("nopass", "qualquer-coisa-12345", "1.1.1.1").ok
+    assert not svc.password_step("nototp", PASSWORD, "1.1.1.1").ok  # a password alone enrolls nobody
+    assert svc.second_step(4, "123456", "1.1.1.1", "ua") is None  # no secret to check
 
 
 def test_old_failures_expire(world, clock) -> None:  # noqa: ANN001
@@ -143,7 +179,7 @@ def test_old_failures_expire(world, clock) -> None:  # noqa: ANN001
     assert svc.check_open("1.1.1.1") == "ok"
 
 
-def test_unlock_ip_and_global(world, clock, session_factory) -> None:  # noqa: ANN001
+def test_unlock_ip_and_user(world, clock, session_factory) -> None:  # noqa: ANN001
     svc, secret, _ = world
     for _ in range(3):
         svc.password_step("joao", "errada", "6.6.6.6")
@@ -153,8 +189,8 @@ def test_unlock_ip_and_global(world, clock, session_factory) -> None:  # noqa: A
     assert svc.check_open("6.6.6.6") == "ok"
     for ip in ("2.2.2.2", "3.3.3.3"):
         svc.password_step("joao", "errada", ip)
-    assert svc.check_open("1.1.1.1") == "global_lock"
-    assert svc.unlock_global() and svc.check_open("1.1.1.1") == "ok"
+    assert svc.user_locked(1)
+    assert svc.unlock_user(1) and not svc.unlock_user(1) and not svc.user_locked(1)
     login(svc, secret, clock)
     assert "unlock" in events(session_factory)
 
@@ -238,16 +274,3 @@ def test_download_token_bound_to_attachment(clock: Clock) -> None:
     assert not read_download(token, 6, SETTINGS, clock())
     assert not read_download(token, 5, SETTINGS, clock() + timedelta(seconds=61))
     assert read_access(token, SETTINGS, clock()) is None  # not an access token
-
-
-def test_create_user_refuses_second_user(session_factory, clock) -> None:  # noqa: ANN001
-    create_user(session_factory, SETTINGS, "joao", PASSWORD, reset=False, clock=clock)
-    with pytest.raises(RuntimeError, match="já existe"):
-        create_user(session_factory, SETTINGS, "outro", PASSWORD, reset=False, clock=clock)
-    again = create_user(session_factory, SETTINGS, "joao", PASSWORD + "!", reset=True, clock=clock)
-    assert again.otpauth_uri.startswith("otpauth://totp/") and len(again.recovery_codes) == 10
-
-
-def test_create_user_rejects_short_password(session_factory, clock) -> None:  # noqa: ANN001
-    with pytest.raises(ValueError, match="12"):
-        create_user(session_factory, SETTINGS, "joao", "curta", reset=False, clock=clock)

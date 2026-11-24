@@ -58,7 +58,7 @@ def events(
 def blocks(request: Request) -> BlocksOut:
     auth = get_deps(request).auth
     return BlocksOut(
-        global_lock=auth.check_open("0.0.0.0") == "global_lock",
+        global_lock=bool(auth.locked_users()),  # "some user is locked out"
         ips=[BlockOut(ip=ip, reason=reason, since=since) for ip, reason, since in auth.blocks()],
     )
 

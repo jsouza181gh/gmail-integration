@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.api.app import create_app
 from src.api.deps import ApiDeps
 from src.auth.config import AuthSettings
-from src.cli.create_user import create_user
+from tests.auth_fakes import make_user, secret_of
 
 ORIGIN = "https://panel.test"
 PASSWORD = "senha-forte-123"
@@ -47,8 +47,9 @@ class Api:
         self.sf = sf
         self.clock = Clock()
         self.alerts = Alerts()
-        enrollment = create_user(sf, SETTINGS, "joao", PASSWORD, reset=False, clock=self.clock)
-        self.secret = pyotp.parse_uri(enrollment.otpauth_uri).secret
+        enrollment = make_user(sf, SETTINGS, "joao", PASSWORD, role="admin",
+                               email="joao@example.com", clock=self.clock)
+        self.secret = secret_of(enrollment)
         self.recovery = enrollment.recovery_codes
         self.deps = ApiDeps.build(sf, SETTINGS, alerts=self.alerts, clock=self.clock, **deps_kw)  # type: ignore[arg-type]
         self.client = TestClient(

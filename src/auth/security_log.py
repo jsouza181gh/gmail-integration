@@ -15,12 +15,14 @@ from src.utils.console import log
 SecurityKind = Literal[
     "login_ok", "login_fail", "totp_fail", "ip_blocked", "global_lock", "refresh_reuse",
     "login_new_ip", "logout", "session_revoked", "csrf_invalid", "download", "unlock",
+    "user_lock", "invite_created", "signup", "onboarding_done",
 ]
 DETAIL_MAX = 1000
 
 _ALERTED: dict[SecurityKind, AlertKind] = {
     "ip_blocked": "ip_blocked",
     "global_lock": "global_lock",
+    "user_lock": "global_lock",
     "refresh_reuse": "refresh_reuse",
     "login_new_ip": "login_new_ip",
 }
