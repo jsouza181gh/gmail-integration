@@ -33,7 +33,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from src.db.vector import EMBED_DIM
-from src.llm.errors import LLMExhaustedError, LLMFatalError
+from src.llm.errors import LLMExhaustedError, LLMFatalError, LLMWaitError
 from src.llm.types import (
     AssistantTurn,
     BinaryPart,
@@ -272,6 +272,7 @@ class LLMGateway:
         mode_source: Callable[[], Literal["free", "fast"]] | None = None,
         api_key: str | None = None,
         call_timeout_s: float | None = None,
+        max_wait_s: float | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -297,6 +298,9 @@ class LLMGateway:
         # Wall-clock cap per attempt: the SDK timeout only bounds the gap
         # between bytes, so a slow model could hold a chat answer for minutes.
         self._call_timeout_s = call_timeout_s
+        # A pacing/backoff wait longer than this is not slept inside the job:
+        # `LLMWaitError` sends the job back to the queue (None: always sleep).
+        self._max_wait_s = max_wait_s
         self._pool = (
             ThreadPoolExecutor(max_workers=8, thread_name_prefix="llm-call")
             if call_timeout_s is not None else None
@@ -384,6 +388,8 @@ class LLMGateway:
                 self._last_call[model] = now
                 return
             wait = max(0.0, self.min_interval_s - (now - last))
+            if self._max_wait_s is not None and wait > self._max_wait_s:
+                raise LLMWaitError(wait, f"ritmo da chave: {model} libera em {wait:.0f}s")
             self._last_call[model] = now + wait
         if wait > 0:
             self._sleep(wait)
@@ -419,6 +425,9 @@ class LLMGateway:
             log(f"saída inválida de {model}: {str(exc)[:80]!r}; tentando de novo")
             return
         seconds = max(1.0, seconds) + random.uniform(0, 2)
+        if self._max_wait_s is not None and seconds > self._max_wait_s:
+            log(f"{why}; devolvendo o job à fila por {seconds:.0f}s")
+            raise LLMWaitError(seconds, f"{why}; tentar de novo em {seconds:.0f}s")
         log(f"{why}; aguardando {seconds:.0f}s")
         self._sleep(seconds)
 

@@ -29,7 +29,7 @@ from src.chat.batches import done_reply
 from src.chat.store import ChatStore
 from src.db.rows import AgentConfigRow
 from src.jobs.types import ChatTurnJob, ClaimedJob
-from src.llm.errors import LLMExhaustedError, LLMFatalError
+from src.llm.errors import LLMExhaustedError, LLMFatalError, NoLLMKeyError
 from src.llm.types import StructuredGenerator
 from src.utils.console import log
 
@@ -53,6 +53,8 @@ def _utcnow() -> datetime:
 def _reason(exc: BaseException) -> str:
     match exc:
         case _TurnFailed():
+            return str(exc)
+        case NoLLMKeyError():
             return str(exc)
         case LLMExhaustedError() if exc.kinds == ("quota",):
             return NO_QUOTA

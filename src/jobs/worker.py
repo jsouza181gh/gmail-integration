@@ -12,9 +12,12 @@ from typing import Protocol
 from src.db.scope import account_scope
 from src.jobs.store import JobStore
 from src.jobs.types import ClaimedJob, JobKind
+from src.llm.errors import NoLLMKeyError, LLMWaitError
 from src.utils.console import log
 
 STALE_CHECK_EVERY_S = 600
+# A job of an account without a Gemini key waits for the key: no attempt is spent.
+NO_KEY_RECHECK_S = 900
 
 
 class Deferred(Exception):
@@ -85,6 +88,14 @@ class Worker:
         except Deferred as d:
             self.store.defer(job.id, d.seconds, d.reason)
             log(f"job {job.id} ({kind}) adiado {d.seconds}s: {d.reason[:200]}")
+            return True
+        except LLMWaitError as w:  # the key must rest: wait in the queue, not in the lane
+            self.store.defer(job.id, w.seconds, str(w))
+            log(f"job {job.id} ({kind}) adiado {w.seconds}s: {str(w)[:200]}")
+            return True
+        except NoLLMKeyError as exc:
+            self.store.defer(job.id, NO_KEY_RECHECK_S, str(exc))
+            log(f"job {job.id} ({kind}) aguarda a chave do Gemini da conta {job.account_id}")
             return True
         except Exception as exc:  # noqa: BLE001 - every failure goes to the queue
             error = f"{type(exc).__name__}: {exc}"
