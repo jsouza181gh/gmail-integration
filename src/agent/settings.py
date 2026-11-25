@@ -101,16 +101,17 @@ def turbo_source(
     session_factory: sessionmaker[Session], ttl_s: float = 30.0,
     clock: Callable[[], float] = time.monotonic,
 ) -> Callable[[], bool]:
-    """Reads backfill_turbo for the backfill's LLM, cached for ttl_s."""
+    """Reads the current account's backfill_turbo, cached for ttl_s per account."""
     settings = RuntimeSettings(session_factory)
-    cache: list[tuple[float, bool]] = []
+    cache: dict[int, tuple[float, bool]] = {}
 
     def read() -> bool:
-        now = clock()
-        if cache and now - cache[0][0] < ttl_s:
-            return cache[0][1]
+        account, now = current_account(), clock()
+        hit = cache.get(account)
+        if hit is not None and now - hit[0] < ttl_s:
+            return hit[1]
         value = settings.backfill_turbo()
-        cache[:] = [(now, value)]
+        cache[account] = (now, value)
         return value
 
     return read
@@ -120,20 +121,21 @@ def mode_source(
     session_factory: sessionmaker[Session], default: LlmMode, ttl_s: float = 30.0,
     clock: Callable[[], float] = time.monotonic,
 ) -> Callable[[], LlmMode]:
-    """Reads llm_mode for the gateway, cached for ttl_s; env default when unset."""
+    """Reads the current account's llm_mode for the gateway, cached for ttl_s per
+    account; env default when unset."""
     settings = RuntimeSettings(session_factory)
-    cache: dict[str, tuple[float, LlmMode]] = {}
+    cache: dict[int, tuple[float, LlmMode]] = {}
 
     def current() -> LlmMode:
-        now = clock()
-        hit = cache.get(LLM_MODE)
+        account, now = current_account(), clock()
+        hit = cache.get(account)
         if hit is not None and now - hit[0] < ttl_s:
             return hit[1]
         try:
             mode = settings.llm_mode() or default
         except Exception:  # noqa: BLE001 - a DB hiccup must not stop LLM calls
             mode = hit[1] if hit else default
-        cache[LLM_MODE] = (now, mode)
+        cache[account] = (now, mode)
         return mode
 
     return current

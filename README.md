@@ -42,6 +42,8 @@ Se `secrets/token.json` não existir, a API sobe mesmo assim e loga o erro do wa
 
 > Se o dono de `secrets/` no host não for UID 1000, defina `APP_UID`/`APP_GID` no `.env` (`id -u`, `id -g`); senão a API não lê o `token.json`.
 
+> **Chaves do Gemini (uma por usuário).** Cada usuário cadastra a própria chave no onboarding (`POST /api/onboarding/llm-key`); os gateways e a memória de cota são por chave. Até as chaves do `.env` serem importadas, só a conta admin as usa (com aviso no log). Depois do deploy: `docker compose exec worker python -m src.cli.import_env_keys --account <e-mail>`; depois disso `GOOGLE_API_KEY[_BACKFILL]` pode sair do `.env`.
+
 > A API roda com **1 worker** de propósito: o lock do sync e o agendador de renovação vivem no processo.
 
 ## Deploy automático (GitHub Actions)
@@ -156,7 +158,7 @@ Tudo sob `/api`, mesma origem do front (a própria API serve o painel em `/`; o 
 Ligar na VPS:
 
 1. No `.env`: `JWT_SECRET` (`python -c "import secrets;print(secrets.token_urlsafe(48))"`), `APP_SECRET` (`python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"`), `APP_ORIGIN=https://<SEU_DOMINIO>`, `APP_ENV=production`. Sem `JWT_SECRET` a API do painel fica desligada (webhook segue funcionando).
-2. `docker compose up -d` e crie o usuário: `docker compose exec api python -m src.cli.create_user <usuario>` — escaneie o QR e guarde os 10 recovery codes.
+2. `docker compose up -d` e convide quem vai usar: `docker compose exec api python -m src.cli.invite <email>` — copie o link impresso e mande à pessoa; ela entra com o Google, cadastra o app autenticador e guarda os 10 recovery codes.
 3. Nginx (no mesmo `server` HTTPS do webhook):
 
 ```nginx

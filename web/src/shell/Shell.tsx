@@ -6,6 +6,7 @@ import { useMe, usePendingCount } from '../api/hooks'
 import { BottomNav } from './BottomNav'
 import { MoreSheet } from './MoreSheet'
 import { SideNav } from './SideNav'
+import { WarningsBanner } from './WarningsBanner'
 
 export function Shell() {
   const qc = useQueryClient()
@@ -26,15 +27,25 @@ export function Shell() {
   return (
     <div className="shell ia-root">
       <div className="shell__side">
-        <SideNav pending={pending} username={me.data?.username ?? ''} onSignOut={() => void signOut()} />
+        <SideNav
+          pending={pending}
+          username={me.data?.username ?? ''}
+          admin={me.data?.role === 'admin'}
+          onSignOut={() => void signOut()}
+        />
       </div>
       <main className="shell__main">
+        <WarningsBanner />
         <Outlet />
       </main>
       <div className="shell__bottom">
         <BottomNav pending={pending} onMore={() => setMoreOpen(true)} />
       </div>
-      {moreOpen ? <MoreSheet onClose={() => setMoreOpen(false)} onSignOut={() => void signOut()} /> : null}
+      {moreOpen ? <MoreSheet
+          admin={me.data?.role === 'admin'}
+          onClose={() => setMoreOpen(false)}
+          onSignOut={() => void signOut()}
+        /> : null}
     </div>
   )
 }

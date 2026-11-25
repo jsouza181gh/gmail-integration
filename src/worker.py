@@ -1,7 +1,7 @@
 """Agent worker process: `python -m src.worker`.
 
-Consumes the Postgres job queue until SIGTERM/SIGINT. One LLM gateway per
-process (free-mode pacing lives in it).
+Consumes the Postgres job queue until SIGTERM/SIGINT. LLM gateways are cached
+per Gemini key (free-mode pacing and quota memory live in them).
 """
 import os
 import signal
@@ -40,51 +40,48 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
 
     from src.agent.wiring import Agent
-    from src.alerts.service import FailureStreak, build_alert_service
+    from src.alerts.service import FailureStreak, build_alert_service, gmail_revoked_hook
+    from src.gmail.clients import GmailClients
     from src.indexing.wiring import Indexing
-    from src.agent.settings import mode_source, turbo_source
-    from src.llm.backfill import BackfillLLM
-    from src.llm.config import (
-        build_backfill_gateway,
-        build_chat_gateway,
-        build_gateway,
-        load_keys,
-        load_llm_config,
-    )
-    from src.llm.recorder import DbCallRecorder
+    from src.llm.accounts import AccountLLMs
+    from src.llm.config import env_account_keys
 
-    # one gateway per key and use: free-tier pacing and quota memory live in
-    # them; the panel can switch free/fast at runtime (app_settings.llm_mode)
-    mode = mode_source(store.sf, load_llm_config().mode)
-    gateway = build_gateway(DbCallRecorder(store.sf), mode)
-    chat_gateway = build_chat_gateway(DbCallRecorder(store.sf), mode)
-    agent = Agent(store, jobs, gateway, chat_gateway)
-    indexing = Indexing(store, jobs, gateway)
-    # App and new mail first: the history backfill runs on its own key (and in
-    # turbo borrows the app key only while it is idle). With one key the
-    # backfill shares the app gateway, so a single quota memory exists.
-    backfill_llm = (
-        BackfillLLM(build_backfill_gateway(DbCallRecorder(store.sf), mode), gateway,
-                    turbo_source(store.sf))
-        if load_keys().separate
-        else BackfillLLM(gateway, None, lambda: False)
-    )
-    backfill_indexing = Indexing(store, jobs, backfill_llm)
-    alerts = build_alert_service(store)
+    # LLM calls resolve the current account's own Gemini keys (BYOK): gateways
+    # (free-tier pacing, cooldown and quota memory) are cached per key. Only the
+    # admin account may fall back to the .env keys, until the import CLI runs.
+    llms = AccountLLMs(store.sf, env_keys=env_account_keys)
+    clients = GmailClients(store.sf)
+    agent = Agent(store, jobs, llms.app, llms.chat, clients)
+    indexing = Indexing(store, jobs, llms.app, clients)
+    # App and new mail first: the history backfill runs on the account's backfill
+    # key (and in turbo borrows its app key only while it is idle).
+    backfill_indexing = Indexing(store, jobs, llms.backfill, clients)
+    alerts = build_alert_service(store, clients)
+    clients.on_revoked = gmail_revoked_hook(alerts)
     runs = FailureStreak(
         AGENT_FAILURE_STREAK,
         lambda n, err: alerts.alert(
             "agent_failures", f"{n} execuções do agente falharam em seguida", err
         ),
     )
+    def keyed(handler: Handler) -> Handler:
+        """An account without a key waits (the job is deferred, no attempt spent)
+        before the job opens runs or fetches anything."""
+
+        def run(job: ClaimedJob) -> None:
+            llms.resolver.keys(job.account_id)
+            handler(job)
+
+        return run
+
     handlers: dict[JobKind, Handler] = {
-        "chat_turn": agent.chat_turn.handle,
-        "process_email": runs.guard(agent.process_email.handle),
+        "chat_turn": agent.chat_turn.handle,  # a missing key becomes the chat's own message
+        "process_email": keyed(runs.guard(agent.process_email.handle)),
         "execute_action": agent.execute_action.handle,
-        "index_email": indexing.indexer.handle,
-        "index_attachment": indexing.documents.handle,
-        "backfill_attachment": backfill_indexing.documents.handle,
-        "backfill_page": backfill_indexing.backfill.handle,
+        "index_email": keyed(indexing.indexer.handle),
+        "index_attachment": keyed(indexing.documents.handle),
+        "backfill_attachment": keyed(backfill_indexing.documents.handle),
+        "backfill_page": keyed(backfill_indexing.backfill.handle),
     }
 
     def on_dead(job: ClaimedJob, error: str) -> None:

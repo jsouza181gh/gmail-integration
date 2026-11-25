@@ -97,7 +97,10 @@ def test_upgrade_keeps_counts(pg: tuple[Config, Engine]) -> None:
     _seed(engine)
     before = _counts(engine, MOVED)
     command.upgrade(cfg, "head")
-    assert _counts(engine, MOVED) == before
+    after = _counts(engine, MOVED)
+    assert {t: after[t] for t in before} == before
+    # tables born after 0021 (invites, oauth clients, Gemini keys...) start empty
+    assert {t: n for t, n in after.items() if t not in before and n} == {}
     with engine.connect() as c:
         acc = c.execute(text("SELECT id, user_id, email_address, history_id, status"
                              " FROM gmail_accounts")).all()

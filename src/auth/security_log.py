@@ -15,12 +15,16 @@ from src.utils.console import log
 SecurityKind = Literal[
     "login_ok", "login_fail", "totp_fail", "ip_blocked", "global_lock", "refresh_reuse",
     "login_new_ip", "logout", "session_revoked", "csrf_invalid", "download", "unlock",
+    "user_lock", "invite_created", "signup", "onboarding_done",
+    "password_changed", "totp_changed", "sessions_revoked", "totp_reset",
+    "account_deleted", "account_disconnected",
 ]
 DETAIL_MAX = 1000
 
 _ALERTED: dict[SecurityKind, AlertKind] = {
     "ip_blocked": "ip_blocked",
     "global_lock": "global_lock",
+    "user_lock": "global_lock",
     "refresh_reuse": "refresh_reuse",
     "login_new_ip": "login_new_ip",
 }
@@ -45,9 +49,12 @@ class SecurityLog:
         self.alerts = alerts
         self._now = clock
 
-    def record(self, kind: SecurityKind, ip: str | None, detail: str) -> None:
+    def record(
+        self, kind: SecurityKind, ip: str | None, detail: str, user_id: int | None = None
+    ) -> None:
         with self.sf.begin() as s:
-            s.add(SecurityEvent(kind=kind, ip=ip, detail=detail[:DETAIL_MAX], created_at=self._now()))
+            s.add(SecurityEvent(kind=kind, ip=ip, detail=detail[:DETAIL_MAX], user_id=user_id,
+                                created_at=self._now()))
         log(f"segurança: {kind} ({ip or '-'})")
         alert = _ALERTED.get(kind)
         if alert is not None:

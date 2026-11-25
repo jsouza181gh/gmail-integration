@@ -32,5 +32,6 @@ export function RequireAuth() {
       </div>
     )
   }
+  if (me.data && !me.data.onboarding_done) return <Navigate to="/onboarding" replace />
   return <Shell />
 }

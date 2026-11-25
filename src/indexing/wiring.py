@@ -4,7 +4,7 @@ from typing import Protocol
 from src.alerts.service import build_alert_service
 from src.classification.classifier import Classifier
 from src.db.store import Store
-from src.gmail.client import get_gmail_service
+from src.gmail.clients import GmailClients
 from src.indexing.backfill import Backfill
 from src.indexing.documents import DocumentIndexer
 from src.indexing.indexer import Indexer
@@ -18,11 +18,16 @@ class IndexingLLM(StructuredGenerator, Embedder, Protocol):
 
 
 class Indexing:
-    def __init__(self, store: Store, jobs: JobStore, gateway: IndexingLLM) -> None:
+    def __init__(
+        self, store: Store, jobs: JobStore, gateway: IndexingLLM,
+        clients: GmailClients | None = None,
+    ) -> None:
+        clients = clients or GmailClients(store.sf)
+        gmail = clients.getter()
         self.index_store = IndexStore(store.sf)
-        self.indexer = Indexer(self.index_store, jobs, gateway, get_gmail_service)
+        self.indexer = Indexer(self.index_store, jobs, gateway, gmail)
         self.documents = DocumentIndexer(
-            self.index_store, gateway, get_gmail_service, max_attempts=jobs.max_attempts
+            self.index_store, gateway, gmail, max_attempts=jobs.max_attempts
         )
         self.backfill = Backfill(
             store,
@@ -30,6 +35,6 @@ class Indexing:
             self.indexer,
             Classifier(store, gateway),
             jobs,
-            build_alert_service(store),
-            get_gmail_service,
+            build_alert_service(store, clients),
+            gmail,
         )

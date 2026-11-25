@@ -12,10 +12,10 @@ from src.classification.classifier import (
 from src.cli.account import cli_account
 from src.db.rows import EmailRow, RunRow
 from src.db.store import Store
-from src.gmail.client import get_gmail_service
+from src.gmail.clients import GmailClients
 from src.gmail.messages import USER_ID, message_summary
-from src.llm.config import build_gateway
-from src.llm.recorder import DbCallRecorder
+from src.llm.accounts import AccountLLMs
+from src.llm.config import env_account_keys
 from src.utils.console import log
 
 DEFAULT_QUERY = "is:unread in:inbox"
@@ -102,7 +102,9 @@ def print_report(store: Store, run_id: int) -> None:
 # --- entry point ------------------------------------------------------------
 
 def build_classifier(store: Store) -> Classifier:
-    return Classifier(store, build_gateway(DbCallRecorder(store.sf)))
+    """In the account's scope: the call uses that account's own key."""
+    llms = AccountLLMs(store.sf, inline_wait_s=None, env_keys=env_account_keys)
+    return Classifier(store, llms.app)
 
 
 def run(
@@ -120,7 +122,7 @@ def run(
                 f"{store.count_pending(run_id)} pendentes"
             )
 
-            service = get_gmail_service()
+            service = GmailClients(store.sf).current()
             classifier = build_classifier(store)
             pages_this_session = 0
 

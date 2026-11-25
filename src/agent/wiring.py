@@ -1,4 +1,4 @@
-"""Builds the real agent: one gateway, the Gmail adapters and the DB adapters.
+"""Builds the real agent: per-account LLM routers, the Gmail adapters and the DB adapters.
 
 Everything process-wide (gateway pacing state, registry) is created once;
 Gmail services are created per call because googleapiclient is not
@@ -26,14 +26,12 @@ from src.chat.retrieval import DbDocCatalog, DbEmailLookup, DbRetriever
 from src.chat.store import ChatStore
 from src.db.store import Store
 from src.gmail.actions import GmailActions
-from src.gmail.client import get_gmail_service, has_scope
+from src.gmail.clients import GmailClients
 from src.gmail.labels import GmailLabeler
 from src.gmail.reader import GmailReader
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
-from src.llm.config import build_chat_gateway, build_gateway
-from src.llm.gateway import LLMGateway
-from src.llm.recorder import DbCallRecorder
+from src.llm.accounts import AccountLLM, AccountLLMs
 
 
 class Agent:
@@ -43,19 +41,24 @@ class Agent:
         self,
         store: Store,
         jobs: JobStore,
-        gateway: LLMGateway | None = None,
-        chat_gateway: LLMGateway | None = None,
+        gateway: AccountLLM | None = None,
+        chat_gateway: AccountLLM | None = None,
+        clients: GmailClients | None = None,
     ) -> None:
+        """`gateway`/`chat_gateway` resolve the current account's own key per call."""
         sf = store.sf
-        gateway = gateway or build_gateway(DbCallRecorder(sf))
-        chat_gateway = chat_gateway or build_chat_gateway(DbCallRecorder(sf))
+        clients = clients or GmailClients(sf)
+        gmail = clients.getter()
+        if gateway is None or chat_gateway is None:
+            llms = AccountLLMs(sf)
+            gateway, chat_gateway = gateway or llms.app, chat_gateway or llms.chat
         self.trail = Trail(sf)
         self.policy = PolicyResolver(sf)
         self.actions = ActionService(sf, jobs, self.policy)
         self.executor = ToolExecutor(build_registry(), self.trail)
         kb = DbKb(sf)
-        mail = GmailReader(get_gmail_service)
-        labels = GmailLabeler(get_gmail_service, sf, dry_run=os.getenv("LABELS_DRY_RUN") == "1")
+        mail = GmailReader(gmail)
+        labels = GmailLabeler(gmail, sf, dry_run=os.getenv("LABELS_DRY_RUN") == "1")
         history = DbSenderHistory(sf)
         self.approvals = ApprovalService(sf, jobs)
         self.chat_store = ChatStore(sf)
@@ -96,7 +99,7 @@ class Agent:
 
         self.card_waiter = CardWaiter(self.chat_store, jobs)
         self.execute_action = ExecuteActionFlow(
-            self.approvals, store, GmailActions(get_gmail_service, has_scope),
+            self.approvals, store, GmailActions(gmail, clients.has_scope),
             on_settled=self.card_waiter.on_action_settled,
         )
         self.process_email = ProcessEmailFlow(

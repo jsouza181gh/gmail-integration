@@ -12,10 +12,13 @@ from ipaddress import IPv4Network, IPv6Network, ip_address
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
-from src.api.deps import CSRF_COOKIE, CSRF_HEADER, get_deps
+from src.api.deps import CSRF_COOKIE, CSRF_HEADER, get_deps, optional_user
 
 WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-NO_SESSION_WRITES = frozenset({"/api/auth/login", "/api/auth/2fa"})  # Origin only
+NO_SESSION_WRITES = frozenset({  # Origin only: there is no session yet
+    "/api/auth/login", "/api/auth/2fa",
+    "/api/entry/invite", "/api/entry/signup", "/api/entry/login",
+})
 AUTH_PREFIX = "/api/auth/"
 DEFAULT_LIMIT = 60
 AUTH_LIMIT = 10
@@ -104,7 +107,10 @@ def security_middleware(
             if request.method in WRITE_METHODS:
                 problem = _csrf_problem(request, path)
                 if problem is not None:
-                    get_deps(request).log.record("csrf_invalid", ip, f"{request.method} {path}: {problem}")
+                    get_deps(request).log.record(
+                        "csrf_invalid", ip, f"{request.method} {path}: {problem}",
+                        optional_user(request),
+                    )
                     return _with_headers(_deny(403, "requisição recusada"), path)
         response = await call_next(request)
         return _with_headers(response, path)

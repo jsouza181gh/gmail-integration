@@ -15,6 +15,32 @@ export const sessions = () => request('GET', '/api/auth/sessions', { schema: z.a
 export const revokeSession = (familyId: string) =>
   request('DELETE', `/api/auth/sessions/${enc(familyId)}`)
 
+// --- entry (no session yet) and onboarding ------------------------------
+export const inviteInfo = (token: string) =>
+  request('POST', '/api/entry/invite', { body: { token }, schema: s.InviteInfo })
+export const googleSignup = (token: string) =>
+  request('POST', '/api/entry/signup', { body: { token }, schema: s.GoogleUrl })
+export const googleLogin = () => request('POST', '/api/entry/login', { schema: s.GoogleUrl })
+export const onboardingState = () =>
+  request('GET', '/api/onboarding/state', { schema: s.OnboardingState })
+export const totpStart = () => request('POST', '/api/onboarding/totp/start', { schema: s.TotpStart })
+export const totpConfirm = (code: string) =>
+  request('POST', '/api/onboarding/totp/confirm', { body: { code }, schema: s.RecoveryCodes })
+export const recoveryAck = () => request('POST', '/api/onboarding/recovery/ack')
+export const setPassword = (password: string) =>
+  request('POST', '/api/onboarding/password', { body: { password } })
+export const skipPassword = () => request('POST', '/api/onboarding/password/skip')
+/** Same-origin image URL of the pending QR code (cookie-authenticated). */
+export const TOTP_QR_URL = '/api/onboarding/totp/qr.svg'
+// --- onboarding: the user's own Gemini key -------------------------------
+export const llmKeyStatus = () =>
+  request('GET', '/api/onboarding/llm-key', { schema: s.LlmKeyStatus })
+export const saveLlmKey = (appKey: string, backfillKey?: string) =>
+  request('POST', '/api/onboarding/llm-key', {
+    body: { app_key: appKey, ...(backfillKey ? { backfill_key: backfillKey } : {}) },
+    schema: s.LlmKeyStatus,
+  })
+
 // --- mail ---------------------------------------------------------------
 export interface EmailFilters {
   category?: string
@@ -127,6 +153,12 @@ export const audit = (limit = 200) =>
 export const securityEvents = (kind?: string) =>
   request('GET', '/api/security/events', { query: { kind }, schema: z.array(s.SecurityEvent) })
 export const securityBlocks = () => request('GET', '/api/security/blocks', { schema: s.BlocksOut })
+// --- gmail ----------------------------------------------------------------
+export const gmailStatus = () => request('GET', '/api/gmail/status', { schema: s.GmailStatus })
+/** Where to send the browser to (re)connect the Gmail at Google. */
+export const connectGmail = () =>
+  request('POST', '/api/oauth/google/connect', { schema: z.object({ url: z.string() }) })
+
 export const notifications = () =>
   request('GET', '/api/notifications', { schema: z.array(s.Notification) })
 
@@ -163,3 +195,36 @@ export const confirmCard = (cardId: number, opts: ConfirmOptions = {}) =>
 export const cancelCard = (cardId: number) =>
   request('POST', `/api/chat/cards/${cardId}/cancel`, { schema: s.ChatCard })
 export const messageAudioUrl = (messageId: number) => `/api/chat/messages/${messageId}/audio`
+
+// --- settings, warnings, onboarding step 6 -------------------------------------
+export const settings = () => request('GET', '/api/settings', { schema: s.Settings })
+export const replaceLlmKeys = (body: { app_key?: string; backfill_key?: string; drop_backfill?: boolean }) =>
+  request('PUT', '/api/settings/llm-keys', { body, schema: s.KeysStatus })
+export const changePassword = (current_password: string, new_password: string) =>
+  request('POST', '/api/auth/password', { body: { current_password, new_password } })
+export const changeTotp = (password: string, code: string) =>
+  request('POST', '/api/auth/totp', { body: { password, code }, schema: s.NewTotp })
+export const signOutOthers = () => request('DELETE', '/api/auth/sessions', { schema: s.Ended })
+export const warnings = () => request('GET', '/api/warnings', { schema: z.array(s.Warning) })
+export const finishOnboarding = (backfill: boolean) =>
+  request('POST', '/api/onboarding/finish', { body: { backfill }, schema: s.FinishOut })
+
+// --- admin ---------------------------------------------------------------------
+export const adminAccounts = () => request('GET', '/api/admin/accounts', { schema: z.array(s.AdminAccount) })
+export const adminInvites = () => request('GET', '/api/admin/invites', { schema: z.array(s.AdminInvite) })
+export const createInvite = (email: string) =>
+  request('POST', '/api/admin/invites', { body: { email }, schema: s.InviteCreated })
+export const revokeInvite = (id: number) => request('DELETE', `/api/admin/invites/${id}`)
+export const resetTotp = (userId: number) => request('POST', `/api/admin/users/${userId}/reset-2fa`)
+export const platformEvents = () =>
+  request('GET', '/api/admin/security/events', { schema: z.array(s.SecurityEvent) })
+// --- account (leaving) --------------------------------------------------
+export const account = () => request('GET', '/api/account', { schema: s.AccountInfo })
+export const disconnectGmail = () => request('POST', '/api/account/disconnect')
+export interface DeleteAccountBody {
+  email: string
+  password?: string
+  code?: string
+}
+export const deleteAccount = (body: DeleteAccountBody) =>
+  request('POST', '/api/account/delete', { body })

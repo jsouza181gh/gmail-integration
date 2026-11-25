@@ -40,3 +40,6 @@ export type IconName =
   | 'arrowup'
   | 'square'
   | 'play'
+  | 'settings'
+  | 'users'
+  | 'copy'

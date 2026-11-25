@@ -175,3 +175,24 @@ class SyncCoordinator:
                 self.run_fn()
             except Exception as exc:  # noqa: BLE001
                 log(f"sync falhou: {type(exc).__name__}: {exc}")
+
+
+class SyncCoordinators:
+    """One `SyncCoordinator` per account: pushes for the same account coalesce,
+    different accounts sync independently."""
+
+    def __init__(self, run_for: Callable[[int], None]) -> None:
+        self._run_for = run_for
+        self._guard = threading.Lock()
+        self._by_account: dict[int, SyncCoordinator] = {}
+
+    def _coordinator(self, account_id: int) -> SyncCoordinator:
+        with self._guard:
+            found = self._by_account.get(account_id)
+            if found is None:
+                found = SyncCoordinator(lambda: self._run_for(account_id))
+                self._by_account[account_id] = found
+            return found
+
+    def trigger(self, account_id: int) -> None:
+        self._coordinator(account_id).trigger()

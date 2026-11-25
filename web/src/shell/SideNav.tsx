@@ -20,7 +20,11 @@ export const SYSTEM_ITEMS: NavItem[] = [
   { to: '/agente', label: 'Agente', icon: 'bot' },
   { to: '/execucoes', label: 'Execuções', icon: 'activity' },
   { to: '/seguranca', label: 'Segurança', icon: 'shield' },
+  { to: '/configuracoes', label: 'Configurações', icon: 'settings' },
+  { to: '/conta', label: 'Conta', icon: 'logout' },
 ]
+
+export const ADMIN_ITEM: NavItem = { to: '/admin', label: 'Administração', icon: 'users' }
 
 function Item({ item, count }: { item: NavItem; count?: number }) {
   return (
@@ -38,7 +42,17 @@ function Item({ item, count }: { item: NavItem; count?: number }) {
   )
 }
 
-export function SideNav({ pending, username, onSignOut }: { pending: number; username: string; onSignOut: () => void }) {
+export function SideNav({
+  pending,
+  username,
+  admin,
+  onSignOut,
+}: {
+  pending: number
+  username: string
+  admin: boolean
+  onSignOut: () => void
+}) {
   return (
     <nav className="ia-sidenav sn" aria-label="Principal">
       <div className="ia-sidenav__brand">
@@ -51,7 +65,7 @@ export function SideNav({ pending, username, onSignOut }: { pending: number; use
         <Item key={item.to} item={item} count={item.to === '/aprovacoes' ? pending : undefined} />
       ))}
       <span className="ia-label ia-sidenav__section">Sistema</span>
-      {SYSTEM_ITEMS.map((item) => (
+      {[...SYSTEM_ITEMS, ...(admin ? [ADMIN_ITEM] : [])].map((item) => (
         <Item key={item.to} item={item} />
       ))}
       <div className="sn-foot">

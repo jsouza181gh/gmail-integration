@@ -18,7 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from src.auth.config import AuthSettings
 
-TokenType = Literal["access", "mfa", "dl"]
+TokenType = Literal["access", "mfa", "dl", "onb"]
 _hasher = PasswordHasher()
 _ALGORITHM = "HS256"
 
@@ -108,6 +108,16 @@ def issue_mfa(user_id: int, settings: AuthSettings, now: datetime) -> str:
 
 def read_mfa(token: str, settings: AuthSettings, now: datetime) -> int | None:
     claims = _read(token, "mfa", settings, now)
+    return int(claims.sub) if claims else None
+
+
+def issue_onboarding(user_id: int, settings: AuthSettings, now: datetime) -> str:
+    """Proof of a Google identity that still has no second factor: opens /api/onboarding only."""
+    return _issue("onb", user_id, settings.onboarding_ttl_s, settings, now)
+
+
+def read_onboarding(token: str, settings: AuthSettings, now: datetime) -> int | None:
+    claims = _read(token, "onb", settings, now)
     return int(claims.sub) if claims else None
 
 

@@ -521,7 +521,7 @@ class LlmCallEmail(AccountOwned, Base):
     email_id: Mapped[str] = mapped_column(String(64), primary_key=True)
 
 
-# --- auth and security (single user) ------------------------------------------
+# --- auth and security ------------------------------------------
 
 class User(Base):
     __tablename__ = "users"
@@ -531,10 +531,42 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(Text, unique=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="member",
                                       server_default="member")
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    totp_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet(APP_SECRET)
+    google_sub: Mapped[str | None] = mapped_column(Text, unique=True)
+    # None: onboarding finished long ago (the pre-invite users); see src.auth.onboarding
+    onboarding_step: Mapped[str | None] = mapped_column(String(16))
+    password_hash: Mapped[str | None] = mapped_column(Text)  # optional: Google is the alternative
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text)  # Fernet(APP_SECRET); None until enrolled
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Lockout of this login target: failures from several IPs lock the user, not the whole site
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lock_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Invite(Base):
+    """Entry ticket: one per e-mail; the admin copies the link (the token is only kept hashed)."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # lowercase
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthClient(Base):
+    """A Google OAuth client: `platform` (the web app), `desktop` (the
+    legacy token of the first account) or `byo` (a user's own project)."""
+
+    __tablename__ = "oauth_clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    client_id: Mapped[str] = mapped_column(Text, nullable=False)
+    client_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class GmailAccount(Base):
@@ -549,6 +581,13 @@ class GmailAccount(Base):
     history_id: Mapped[str | None] = mapped_column(String(32))
     watch_expiration: Mapped[int | None] = mapped_column(BigInteger)
     connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Google credentials of this mailbox (status: connected | disconnected |
+    # revoked | template). The refresh token is sealed with APP_SECRET.
+    oauth_client_id: Mapped[int | None] = mapped_column(ForeignKey("oauth_clients.id"))
+    refresh_token_enc: Mapped[str | None] = mapped_column(Text)
+    scopes: Mapped[str | None] = mapped_column(Text)  # space separated
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
@@ -608,6 +647,7 @@ class LoginFailure(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ip: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     stage: Mapped[str] = mapped_column(String(8), nullable=False)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)  # the target
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
@@ -629,6 +669,8 @@ class SecurityEvent(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     ip: Mapped[str | None] = mapped_column(String(64))
     detail: Mapped[str] = mapped_column(Text, nullable=False)
+    # who the event is about; NULL = platform-wide (IP blocks, global lock), admin only
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
@@ -801,3 +843,16 @@ class ChatCardItem(AccountOwned, Base):
     email_id: Mapped[str | None] = mapped_column(String(64))
     action_id: Mapped[int | None] = mapped_column(ForeignKey("suggested_actions.id"))
     attachment_id: Mapped[int | None] = mapped_column(ForeignKey("attachments.id"))
+
+
+class UserLlmKey(Base):
+    """A user's own Gemini key(s), sealed (`src.platform.secrets.seal`). Platform
+    table (not account-owned): read through `src.llm.keys`, never by content code."""
+
+    __tablename__ = "user_llm_keys"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    app_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    backfill_key_enc: Mapped[str | None] = mapped_column(Text)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)

@@ -16,7 +16,8 @@ TABLES = {
     "jobs", "agent_configs", "agent_runs", "agent_steps",
     "tool_policies", "automation_rules", "suggested_actions", "gmail_labels", "feedback", "notifications",
     "email_embeddings", "attachments",
-    "users", "recovery_codes", "auth_sessions", "login_failures", "ip_blocks",
+    "oauth_clients", "users", "invites", "user_llm_keys", "recovery_codes", "auth_sessions",
+    "login_failures", "ip_blocks",
     "security_events", "app_settings", "config_audit",
     "chat_conversations", "chat_messages", "chat_audio", "chat_cards", "chat_card_items",
     "chat_message_refs",
@@ -173,3 +174,37 @@ def test_migration_0020_activates_chat_prompt_v3(tmp_path: Path, monkeypatch: py
     with create_engine(url).connect() as c:
         prompt = c.execute(text("select chat_prompt from agent_configs where active")).scalar()
     assert prompt == CHAT_PROMPT_V3
+
+
+def test_migration_0023_keeps_the_existing_user_and_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, url = _upgraded(tmp_path, monkeypatch, "0021")
+    with create_engine(url).begin() as c:
+        c.execute(text(
+            "insert into users (id, username, password_hash, totp_secret_enc, created_at,"
+            " password_changed_at, role) values (7, 'joao', 'h', 'e', '2026-11-01', '2026-11-01', 'admin')"
+        ))
+    command.upgrade(cfg, "0023")
+    with create_engine(url).connect() as c:
+        row = c.execute(text(
+            "select password_hash, totp_secret_enc, onboarding_step, google_sub, locked_at"
+            " from users where id = 7"
+        )).one()
+    assert tuple(row) == ("h", "e", None, None, None)  # onboarding_step NULL = already done
+    insp = inspect(create_engine(url))
+    assert {"email", "token_hash", "created_by", "accepted_at", "revoked_at"} <= {
+        c["name"] for c in insp.get_columns("invites")
+    }
+    assert "user_id" in {c["name"] for c in insp.get_columns("login_failures")}
+    with create_engine(url).begin() as c:  # an invited user with no credentials yet
+        c.execute(text(
+            "insert into users (id, username, created_at, password_changed_at, role)"
+            " values (8, 'ana@x.com', '2026-11-24', '2026-11-24', 'member')"
+        ))
+    command.downgrade(cfg, "0021")
+    insp = inspect(create_engine(url))
+    assert "invites" not in insp.get_table_names()
+    assert "google_sub" not in {c["name"] for c in insp.get_columns("users")}
+    with create_engine(url).connect() as c:
+        assert c.execute(text("select password_hash from users where id = 7")).scalar() == "h"

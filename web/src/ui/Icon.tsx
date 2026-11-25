@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Copy,
   Download,
   FileText,
   History,
@@ -29,6 +30,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Settings,
   Search,
   ShieldCheck,
   Smartphone,
@@ -38,6 +40,7 @@ import {
   Tag,
   Trash2,
   TriangleAlert,
+  Users,
   X,
   Zap,
   type LucideIcon,
@@ -86,6 +89,9 @@ const ICONS: Record<IconName, LucideIcon> = {
   arrowup: ArrowUp,
   square: Square,
   play: Play,
+  settings: Settings,
+  users: Users,
+  copy: Copy,
 }
 
 export type { IconName }

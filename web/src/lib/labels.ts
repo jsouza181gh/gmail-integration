@@ -44,6 +44,10 @@ const SECURITY_KINDS: Record<string, SecurityKindInfo> = {
   totp_fail: { label: 'código errado', icon: 'alert', tone: 'warning' },
   ip_blocked: { label: 'IP bloqueado', icon: 'ban', tone: 'danger' },
   global_lock: { label: 'login fechado', icon: 'lock', tone: 'danger' },
+  user_lock: { label: 'usuário fechado', icon: 'lock', tone: 'danger' },
+  invite_created: { label: 'convite criado', icon: 'mail', tone: 'info' },
+  signup: { label: 'conta criada', icon: 'check', tone: 'accent' },
+  onboarding_done: { label: 'entrada concluída', icon: 'check', tone: 'accent' },
   refresh_reuse: { label: 'sessão reutilizada', icon: 'alert', tone: 'danger' },
   login_new_ip: { label: 'login de IP novo', icon: 'mail', tone: 'warning' },
   logout: { label: 'logout', icon: 'logout', tone: 'neutral' },
@@ -51,6 +55,12 @@ const SECURITY_KINDS: Record<string, SecurityKindInfo> = {
   csrf_invalid: { label: 'CSRF recusado', icon: 'ban', tone: 'danger' },
   download: { label: 'download', icon: 'download', tone: 'info' },
   unlock: { label: 'desbloqueio', icon: 'lock', tone: 'neutral' },
+  password_changed: { label: 'senha trocada', icon: 'keyround', tone: 'info' },
+  totp_changed: { label: 'autenticador trocado', icon: 'keyround', tone: 'info' },
+  sessions_revoked: { label: 'outras sessões encerradas', icon: 'logout', tone: 'neutral' },
+  totp_reset: { label: '2FA resetado', icon: 'lock', tone: 'warning' },
+  account_deleted: { label: 'conta excluída', icon: 'ban', tone: 'warning' },
+  account_disconnected: { label: 'Gmail desconectado', icon: 'logout', tone: 'neutral' },
 }
 
 export function securityKind(kind: string): SecurityKindInfo {

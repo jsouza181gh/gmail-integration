@@ -9,9 +9,21 @@ const LINKS: Array<{ to: string; label: string; icon: IconName }> = [
   { to: '/agente', label: 'Agente', icon: 'bot' },
   { to: '/execucoes', label: 'Execuções', icon: 'activity' },
   { to: '/seguranca', label: 'Segurança', icon: 'shield' },
+  { to: '/configuracoes', label: 'Configurações', icon: 'settings' },
+  { to: '/conta', label: 'Conta', icon: 'logout' },
 ]
 
-export function MoreSheet({ onClose, onSignOut }: { onClose: () => void; onSignOut: () => void }) {
+const ADMIN_LINK = { to: '/admin', label: 'Administração', icon: 'users' } as const
+
+export function MoreSheet({
+  admin,
+  onClose,
+  onSignOut,
+}: {
+  admin: boolean
+  onClose: () => void
+  onSignOut: () => void
+}) {
   const backfill = useBackfill()
   const paused = backfill.data ? backfill.data.paused || backfill.data.deferred_until !== null : false
 
@@ -27,7 +39,7 @@ export function MoreSheet({ onClose, onSignOut }: { onClose: () => void; onSignO
     <div className="sheet-scrim" onClick={onClose}>
       <nav className="ia-card sheet" aria-label="Mais" onClick={(e) => e.stopPropagation()}>
         <span className="sheet__grip" aria-hidden="true" />
-        {LINKS.map((l) => (
+        {[...LINKS, ...(admin ? [ADMIN_LINK] : [])].map((l) => (
           <Link key={l.to} to={l.to} className="ia-sidenav__item sheet__item" onClick={onClose}>
             <Icon name={l.icon} size={18} />
             {l.label}

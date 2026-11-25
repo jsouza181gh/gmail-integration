@@ -54,10 +54,12 @@ def download(
 
 
 def search(store: IndexStore, query: str, k: int) -> str:
-    from src.llm.config import build_gateway
+    from src.llm.accounts import AccountLLMs
+    from src.llm.config import env_account_keys
     from src.llm.types import EmbedInput
 
-    vec = build_gateway().embed([EmbedInput(text=query)], purpose="search", task="RETRIEVAL_QUERY")
+    llms = AccountLLMs(store.sf, inline_wait_s=None, env_keys=env_account_keys)
+    vec = llms.app.embed([EmbedInput(text=query)], purpose="search", task="RETRIEVAL_QUERY")
     hits = store.search(vec.vectors[0], k)
     return "\n".join(f"{h.score:.3f} {h.kind:<10} {h.id:<20} {h.title[:100]}" for h in hits) or "nada"
 
@@ -92,9 +94,9 @@ def main(argv: list[str] | None = None) -> None:
             elif args.cmd == "list":
                 print(list_documents(store, args.doc_class, args.doc_type, args.limit))
             else:
-                from src.gmail.client import get_gmail_service
+                from src.gmail.clients import GmailClients
 
-                print(download(store, get_gmail_service, args.attachment_id, args.out))
+                print(download(store, GmailClients(db.sf).getter(), args.attachment_id, args.out))
     finally:
         db.close()
     sys.exit(0)
