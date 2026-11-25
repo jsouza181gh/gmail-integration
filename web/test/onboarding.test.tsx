@@ -7,11 +7,11 @@ import { json, noContent, renderApp, signedIn } from './render'
 
 afterEach(() => vi.restoreAllMocks())
 
-const STEPS = ['gmail', 'totp', 'password_optional', 'done_basic']
+const STEPS = ['gmail', 'totp', 'password_optional', 'llm_key', 'done']
 const state = (step: string | null, extra: Record<string, unknown> = {}) => ({
   step,
   steps: STEPS,
-  done: step === 'done_basic' || step === null,
+  done: step === 'done' || step === null,
   email: 'ana@example.com',
   has_password: false,
   totp_confirmed: false,
@@ -41,7 +41,7 @@ test('totp_step_walks_install_scan_confirm_and_codes_then_advances', async () =>
   const user = userEvent.setup()
   renderApp('/onboarding')
 
-  expect(await screen.findByText('Etapa 2 de 3: Proteção da conta')).toBeInTheDocument()
+  expect(await screen.findByText('Etapa 2 de 4: Proteção da conta')).toBeInTheDocument()
   expect(screen.getByText(/Google Authenticator/)).toBeInTheDocument()
   expect(screen.getByText(/Microsoft Authenticator/)).toBeInTheDocument()
   expect(screen.getAllByRole('link', { name: 'Android' })).toHaveLength(2)
@@ -106,47 +106,59 @@ test('resuming_after_confirming_offers_to_redo_the_step', async () => {
   expect(await screen.findByText(/só aparecem uma vez/)).toBeInTheDocument()
 })
 
-test('password_step_saves_or_skips_and_finishing_goes_home', async () => {
+test('password_step_saves_then_the_gemini_key_comes_next', async () => {
   let current = state('password_optional')
   const sent: unknown[] = []
   server.use(
     http.get('/api/onboarding/state', () => json(current)),
     http.post('/api/onboarding/password', async ({ request }) => {
       sent.push(await request.json())
-      current = state('done_basic')
+      current = state('llm_key')
       return noContent()
     }),
   )
   const user = userEvent.setup()
   renderApp('/onboarding')
-  expect(await screen.findByText('Etapa 3 de 3: Senha (opcional)')).toBeInTheDocument()
+  expect(await screen.findByText('Etapa 3 de 4: Senha (opcional)')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Salvar senha' })).toBeDisabled()
   await user.type(screen.getByLabelText(/Senha \(mínimo 12 caracteres\)/), 'uma-senha-bem-longa')
-  server.use(
-    http.get('/api/auth/me', () => json({ username: 'ana@example.com', onboarding_done: true })),
-    http.get('/api/actions', () => json([])),
-  )
   await user.click(screen.getByRole('button', { name: 'Salvar senha' }))
-  await waitFor(() =>
-    expect(screen.getAllByRole('navigation', { name: 'Principal' }).length).toBeGreaterThan(0),
-  )
+  expect(await screen.findByText('Etapa 4 de 4: Chave do Gemini')).toBeInTheDocument()
   expect(sent).toEqual([{ password: 'uma-senha-bem-longa' }])
 })
 
-test('skipping_the_password_finishes_too', async () => {
+test('skipping_the_password_goes_to_the_gemini_key', async () => {
   let current = state('password_optional')
   server.use(
     http.get('/api/onboarding/state', () => json(current)),
     http.post('/api/onboarding/password/skip', () => {
-      current = state('done_basic')
+      current = state('llm_key')
       return noContent()
+    }),
+  )
+  const user = userEvent.setup()
+  renderApp('/onboarding')
+  await user.click(await screen.findByRole('button', { name: 'Não quero senha agora' }))
+  expect(await screen.findByRole('heading', { name: 'Chave do Gemini' })).toBeInTheDocument()
+})
+
+test('a_working_gemini_key_finishes_and_goes_home', async () => {
+  let current = state('llm_key')
+  server.use(
+    http.get('/api/onboarding/state', () => json(current)),
+    http.post('/api/onboarding/llm-key', () => {
+      current = state('done')
+      return json({ configured: true, has_backfill_key: false, validated_at: null, last_error: null, next_step: 'done' })
     }),
     http.get('/api/auth/me', () => json({ username: 'ana', onboarding_done: true })),
     http.get('/api/actions', () => json([])),
   )
   const user = userEvent.setup()
   renderApp('/onboarding')
-  await user.click(await screen.findByRole('button', { name: 'Não quero senha agora' }))
+  expect(await screen.findByText('Etapa 4 de 4: Chave do Gemini')).toBeInTheDocument()
+  await user.type(screen.getByLabelText('Sua chave'), 'AIza-abc')
+  await user.click(screen.getByRole('button', { name: 'Testar e salvar' }))
+  await user.click(await screen.findByRole('button', { name: 'Continuar' }))
   await waitFor(() =>
     expect(screen.getAllByRole('navigation', { name: 'Principal' }).length).toBeGreaterThan(0),
   )
@@ -158,11 +170,11 @@ test('a_user_with_unfinished_onboarding_is_sent_there_from_the_panel', async () 
     http.get('/api/onboarding/state', () => json(state('totp'))),
   )
   renderApp('/caixa')
-  expect(await screen.findByText(/Etapa 2 de 3/)).toBeInTheDocument()
+  expect(await screen.findByText(/Etapa 2 de 4/)).toBeInTheDocument()
 })
 
 test('an_unknown_future_step_does_not_crash', async () => {
-  server.use(http.get('/api/onboarding/state', () => json({ ...state('llm_key'), steps: [...STEPS, 'x'] })))
+  server.use(http.get('/api/onboarding/state', () => json({ ...state('x'), steps: ['x', ...STEPS] })))
   renderApp('/onboarding')
   expect(await screen.findByText(/ainda não está disponível/)).toBeInTheDocument()
 })

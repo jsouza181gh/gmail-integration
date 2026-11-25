@@ -14,6 +14,7 @@ from src.agent.context import AgentContext
 from src.agent.registry import Registry
 from src.agent.state import AgentState, StateUpdate
 from src.agent.trail import Trail
+from src.llm.errors import LLMWaitError, NoLLMKeyError
 from src.llm.types import ChatMessage, Schema, ToolCallRequest
 
 ERROR_MAX = 500
@@ -85,6 +86,10 @@ class ToolExecutor:
             )
         except ValidationError as exc:
             return self._fail(step_id, call, f"argumentos inválidos: {exc.errors()[:3]}")
+        except (LLMWaitError, NoLLMKeyError) as exc:
+            # not the tool's fault: the job goes back to the queue and retries whole
+            self.trail.close_step(step_id, "error", f"{type(exc).__name__}: {exc}")
+            raise
         except Exception as exc:  # noqa: BLE001 - surfaced to the model and the trail
             return self._fail(step_id, call, f"{type(exc).__name__}: {exc}")
 

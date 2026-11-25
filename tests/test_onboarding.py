@@ -21,7 +21,7 @@ NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
 
 
 def test_steps_are_the_contract_and_extensible() -> None:
-    assert ONBOARDING_STEPS == ["gmail", "totp", "password_optional", "done_basic"]
+    assert ONBOARDING_STEPS == ["gmail", "totp", "password_optional", "llm_key", "done"]
     assert is_complete(None) and is_complete(ONBOARDING_STEPS[-1])
     assert not is_complete("totp") and not is_complete("password_optional")
     assert needs_enrollment("gmail") and needs_enrollment("totp")
@@ -30,7 +30,7 @@ def test_steps_are_the_contract_and_extensible() -> None:
 
 def test_extending_the_list_moves_the_finish_line(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.auth.onboarding.ONBOARDING_STEPS", [*ONBOARDING_STEPS, "ready"])
-    assert not is_complete("done_basic") and is_complete("ready")
+    assert not is_complete("done") and is_complete("ready")
 
 
 @pytest.fixture
@@ -99,18 +99,18 @@ def test_password_is_optional_and_checked(ob: Onboarding, session_factory: sessi
     _at_password_step(ob)
     with pytest.raises(OnboardingError, match="12"):
         ob.set_password(5, "curta")
-    assert ob.set_password(5, "uma-senha-bem-longa") == "done_basic"
+    assert ob.set_password(5, "uma-senha-bem-longa") == "llm_key"
     with session_factory() as s:
         user = s.get_one(User, 5)
         assert user.password_hash and verify_password(user.password_hash, "uma-senha-bem-longa")
-    assert ob.state(5).done and ob.state(5).has_password
+    assert not ob.state(5).done and ob.state(5).has_password  # the Gemini key comes next
 
 
 def test_skipping_the_password_finishes_without_one(
     ob: Onboarding, session_factory: sessionmaker[Session]
 ) -> None:
     _at_password_step(ob)
-    assert ob.skip_password(5) == "done_basic"
+    assert ob.skip_password(5) == "llm_key"
     with session_factory() as s:
         assert s.get_one(User, 5).password_hash is None
 
@@ -135,3 +135,13 @@ def test_begin_enrollment_is_false_for_a_fully_enrolled_user(session_factory: se
     make_user(session_factory, SETTINGS, "joao", "uma-senha-bem-longa", user_id=3)
     ob = Onboarding(session_factory, SETTINGS, lambda: NOW)
     assert ob.begin_enrollment_if_needed(3) is False
+
+
+def test_finishing_a_step_advances_only_from_that_step(
+    session_factory: sessionmaker[Session], ob: Onboarding
+) -> None:
+    assert ob.finish_step(5, "llm_key") == "totp"  # not on it yet: nothing moves
+    with session_factory.begin() as s:
+        s.get_one(User, 5).onboarding_step = "llm_key"
+    assert ob.finish_step(5, "llm_key") == "done"
+    assert ob.finish_step(5, "llm_key") == "done"  # a later key change keeps it done

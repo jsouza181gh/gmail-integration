@@ -21,6 +21,9 @@ from src.chat.store import ChatStore
 from src.db.models import User
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
+from src.llm.accounts import KeyResolver
+from src.llm.config import env_account_keys
+from src.llm.keys import validate_key
 
 ACCESS_COOKIE = "access"
 REFRESH_COOKIE = "refresh"
@@ -69,6 +72,8 @@ class ApiDeps:
         cards: CardService,
         stream: "StreamTiming",
         on_connected: Callable[[int], None] = _nothing_to_start,
+        llm_keys: KeyResolver,
+        key_validator: Callable[[str], str | None],
     ) -> None:
         self.sf = sf
         self.settings = settings
@@ -84,6 +89,8 @@ class ApiDeps:
         self.cards = cards
         self.stream = stream
         self.on_connected = on_connected  # account id: its Gmail was (re)connected
+        self.llm_keys = llm_keys  # the account's Gemini keys (cached)
+        self.key_validator = key_validator  # None = key works; text = what to tell the user
 
     @classmethod
     def build(
@@ -96,6 +103,7 @@ class ApiDeps:
         clock: Callable[[], datetime] = _utcnow,
         stream: "StreamTiming | None" = None,
         on_connected: Callable[[int], None] = _nothing_to_start,
+        key_validator: Callable[[str], str | None] = validate_key,
     ) -> "ApiDeps":
         log = SecurityLog(sf, alerts, clock)
         jobs = JobStore(sf)
@@ -126,6 +134,8 @@ class ApiDeps:
             cards=cards,
             stream=stream or StreamTiming(),
             on_connected=on_connected,
+            llm_keys=KeyResolver(sf, env_keys=env_account_keys),
+            key_validator=key_validator,
         )
 
 

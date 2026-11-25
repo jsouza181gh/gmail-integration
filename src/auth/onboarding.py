@@ -1,14 +1,15 @@
 """Onboarding steps after the first Google click.
 
-`users.onboarding_step` walks `ONBOARDING_STEPS`; the last one is the finish
-line. NULL means "finished long ago" (users that existed before invites).
-Later phases extend the list (phase 4 inserts the Gemini key step, phase 5
-the final one): `is_complete` always looks at the current last entry, so the
-panel keeps sending people through steps they have not done.
+`users.onboarding_step` walks `ONBOARDING_STEPS`; the last one (`done`) is the
+finish line. NULL means "finished long ago" (users that existed before invites).
+The whole order lives here, so no step can be left without a way forward:
+`is_complete` looks at the last entry and every step's owner calls
+`next_step`/`finish_step` from its own step.
 
-Steps owned here: `gmail` (done by the Google consent itself, so signup
-starts at `totp`), `totp` (secret, first code, recovery codes shown),
-`password_optional`, `done_basic`.
+Steps: `gmail` (done by the Google consent itself, so signup starts at
+`totp`), `totp` (secret, first code, recovery codes shown),
+`password_optional`, `llm_key` (the user's Gemini key, src/api/routes/llm_key.py),
+`done`.
 """
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -28,7 +29,7 @@ from src.auth.enroll import (
 from src.db.models import RecoveryCode, User
 from src.llm.types import Schema
 
-ONBOARDING_STEPS: list[str] = ["gmail", "totp", "password_optional", "done_basic"]
+ONBOARDING_STEPS: list[str] = ["gmail", "totp", "password_optional", "llm_key", "done"]
 FIRST_STEP_AFTER_SIGNUP = "totp"  # the Google consent connected the Gmail already
 
 
@@ -169,4 +170,15 @@ class Onboarding:
             user = self._user(s, user_id)
             self._need(user, "password_optional")
             user.onboarding_step = next_step("password_optional")
+            return user.onboarding_step
+
+    def finish_step(self, user_id: int, step: str) -> str | None:
+        """`step` was done: advance if the user is on it (else leave it as is).
+
+        For steps whose action can also happen later, outside the onboarding
+        (the Gemini key is replaced from the settings page)."""
+        with self.sf.begin() as s:
+            user = self._user(s, user_id)
+            if user.onboarding_step == step:
+                user.onboarding_step = next_step(step)
             return user.onboarding_step

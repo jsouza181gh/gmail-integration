@@ -1,9 +1,10 @@
 // The registry of onboarding steps. The server owns the order (ONBOARDING_STEPS in
 // src/auth/onboarding.py); a later phase adds its page here under the same name
-// (phase 4: 'llm_key', phase 5: the last one) and nothing else in this folder changes.
+// and nothing else in this folder changes.
 import type { ComponentType } from 'react'
 import type { OnboardingState } from '../../api/schemas'
 import { GmailStep } from './GmailStep'
+import { LlmKeyForm } from './LlmKey'
 import { PasswordStep } from './PasswordStep'
 import { TotpStep } from './TotpStep'
 
@@ -23,4 +24,5 @@ export const STEP_PAGES: Record<string, StepInfo> = {
   gmail: { label: 'Gmail', Page: GmailStep },
   totp: { label: 'Proteção da conta', Page: TotpStep },
   password_optional: { label: 'Senha (opcional)', Page: PasswordStep },
+  llm_key: { label: 'Chave do Gemini', Page: ({ onAdvance }) => <LlmKeyForm onContinue={onAdvance} /> },
 }

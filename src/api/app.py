@@ -162,6 +162,9 @@ def create_app(
         for module in (auth, entry, onboarding, admin_invites, mail, actions, documents, ops,
                        security, agent, chat, gmail, oauth):
             app.include_router(module.router)
+        from src.api.routes import llm_key
+
+        app.include_router(llm_key.router)
 
     @app.post("/webhooks/gmail")
     async def gmail_webhook(request: Request, background: BackgroundTasks) -> Response:

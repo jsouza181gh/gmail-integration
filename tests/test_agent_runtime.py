@@ -12,6 +12,7 @@ from src.agent.state import AgentState, Classified, EmailFacts, StateUpdate
 from src.agent.trail import Trail
 from src.classification.taxonomy import Classification
 from src.db.models import AgentConfig
+from src.llm.errors import LLMWaitError
 from src.llm.types import ChatMessage, Prompt, Schema, ToolCallRequest
 from tests.agent_fakes import FakeToolCaller, make_ctx, make_email, turn
 
@@ -61,6 +62,12 @@ def explode(runtime: ToolRuntime[PeekCtx, PeekState]) -> tuple[str, StateUpdate 
 
 
 @tool(response_format="content_and_artifact")
+def resting(runtime: ToolRuntime[PeekCtx, PeekState]) -> tuple[str, StateUpdate | None]:
+    """The key must rest."""
+    raise LLMWaitError(60, "429")
+
+
+@tool(response_format="content_and_artifact")
 def secret(runtime: ToolRuntime[PeekCtx, PeekState]) -> tuple[str, StateUpdate | None]:
     """Only for planned calls."""
     return "planned", None
@@ -80,7 +87,7 @@ def _tool(t: object, *, planned: bool = False) -> AgentTool[PeekCtx, PeekState]:
 
 
 REGISTRY = Registry(
-    [_tool(peek), _tool(mark), _tool(explode), _tool(secret, planned=True)]
+    [_tool(peek), _tool(mark), _tool(explode), _tool(resting, planned=True), _tool(secret, planned=True)]
 )
 
 
@@ -154,6 +161,16 @@ def test_failures_become_error_messages(
     assert res.message.content.startswith("erro:") and fragment in res.message.content
     (step,) = trail.steps(run)
     assert (step.kind, step.name, step.status) == ("tool", call.name, "error")
+
+
+def test_a_waiting_key_is_not_a_tool_failure(trail: Trail) -> None:
+    run = trail.start_run("webhook", "a", 1)
+    with pytest.raises(LLMWaitError):
+        ToolExecutor(REGISTRY, trail).execute(
+            _call("resting"), make_ctx(run_id=run), _state(), source="planned"
+        )
+    (step,) = trail.steps(run)
+    assert step.status == "error"
 
 
 def test_planned_only_tool_runs_when_planned(trail: Trail) -> None:

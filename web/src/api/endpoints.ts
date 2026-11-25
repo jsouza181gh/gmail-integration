@@ -32,6 +32,14 @@ export const setPassword = (password: string) =>
 export const skipPassword = () => request('POST', '/api/onboarding/password/skip')
 /** Same-origin image URL of the pending QR code (cookie-authenticated). */
 export const TOTP_QR_URL = '/api/onboarding/totp/qr.svg'
+// --- onboarding: the user's own Gemini key -------------------------------
+export const llmKeyStatus = () =>
+  request('GET', '/api/onboarding/llm-key', { schema: s.LlmKeyStatus })
+export const saveLlmKey = (appKey: string, backfillKey?: string) =>
+  request('POST', '/api/onboarding/llm-key', {
+    body: { app_key: appKey, ...(backfillKey ? { backfill_key: backfillKey } : {}) },
+    schema: s.LlmKeyStatus,
+  })
 
 // --- mail ---------------------------------------------------------------
 export interface EmailFilters {

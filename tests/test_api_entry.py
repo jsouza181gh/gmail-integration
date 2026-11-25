@@ -12,7 +12,7 @@ from src.db.models import GmailAccount, Invite, SecurityEvent, ToolPolicy, User
 from src.db.scope import account_scope, system_scope
 from src.gmail import oauth
 from src.gmail.oauth import GoogleIdentity, OAuthState
-from tests.api_fakes import PASSWORD, Api
+from tests.api_fakes import PASSWORD, SETTINGS, Api
 from tests.auth_fakes import make_user
 
 pytestmark = pytest.mark.usefixtures("_platform")
@@ -175,7 +175,7 @@ def test_callbacks_are_registered_in_phase_2s_registry(
 # --- signup -------------------------------------------------------------------------
 
 def test_signup_creates_user_and_account_then_onboarding_walks_to_done(
-    api: Api, saved: Saved, session_factory: sessionmaker[Session]
+    api: Api, saved: Saved, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with account_scope(1), session_factory.begin() as s:
         s.add(ToolPolicy(target="apply_labels", trigger="webhook", policy="auto"))
@@ -225,6 +225,12 @@ def test_signup_creates_user_and_account_then_onboarding_walks_to_done(
     assert c.post("/api/onboarding/password", json={"password": "curta"}).status_code == 409
     r = c.post("/api/onboarding/password", json={"password": "uma-senha-bem-longa"})
     assert r.status_code == 204
+    assert c.get("/api/auth/me").json()["onboarding_step"] == "llm_key"
+
+    api.deps.key_validator = lambda key: None  # never Google from a test
+    monkeypatch.setenv("APP_SECRET", SETTINGS.app_secret)  # the key is stored sealed
+    r = c.post("/api/onboarding/llm-key", json={"app_key": "AIza-good"})
+    assert r.status_code == 200 and r.json()["next_step"] == "done"
     me = c.get("/api/auth/me").json()
     assert me["onboarding_done"] is True
     with session_factory() as s:
@@ -252,7 +258,8 @@ def test_password_step_can_be_skipped(api: Api, saved: Saved) -> None:
     c.post("/api/onboarding/recovery/ack")
     c.headers["X-CSRF-Token"] = jar_value(api, "csrf") or ""
     assert c.post("/api/onboarding/password/skip").status_code == 204
-    assert c.get("/api/auth/me").json()["onboarding_done"] is True
+    me = c.get("/api/auth/me").json()
+    assert (me["onboarding_step"], me["onboarding_done"]) == ("llm_key", False)  # the Gemini key is next
     c.cookies.clear()
     # no password was set: the e-mail cannot be used for password login
     assert c.post("/api/auth/login", json={"username": INVITE_EMAIL, "password": PASSWORD}).status_code == 401

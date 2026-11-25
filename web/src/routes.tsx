@@ -9,6 +9,7 @@ import Entrar from './pages/Entrada/Entrar'
 import NaoConvidado from './pages/Entrada/NaoConvidado'
 import Login from './pages/Login'
 import Onboarding from './pages/Onboarding'
+import LlmKey from './pages/Onboarding/LlmKey'
 import Relevantes from './pages/Relevantes'
 import Seguranca from './pages/Seguranca'
 import { RequireAuth } from './shell/RequireAuth'
@@ -30,6 +31,7 @@ export function AppRoutes() {
         <Route path="agente" element={<Agente />} />
         <Route path="execucoes" element={<Execucoes />} />
         <Route path="seguranca" element={<Seguranca />} />
+        <Route path="onboarding/chave" element={<LlmKey />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

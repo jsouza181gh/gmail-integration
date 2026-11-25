@@ -3,11 +3,12 @@
 Every method is its own transaction. A claim increments `attempts`, so a job
 that crashes the worker still counts the attempt when it is requeued as stale.
 """
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import ColumnElement, CursorResult, func, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -88,6 +89,10 @@ class JobStore:
         self.sf = session_factory
         self._now = clock
         self.max_attempts = max_attempts
+        # lane -> account -> tick of its last claim (round-robin memory)
+        self._served: dict[tuple[str, ...], dict[int, int]] = {}
+        self._tick = 0
+        self._turn_lock = threading.Lock()
 
     def enqueue(self, payload: AnyJob) -> bool:
         """False when a job with the same idempotency key already exists."""
@@ -112,6 +117,18 @@ class JobStore:
             stmt = insert(Job).values(row).on_conflict_do_nothing().returning(Job.id)
             return s.execute(stmt).scalar_one_or_none() is not None
 
+    def _next_account(self, lane: tuple[str, ...], candidates: list[int]) -> list[int]:
+        """Candidates in turn order: the account served longest ago comes first
+        (never served = first, lowest id breaking ties)."""
+        with self._turn_lock:
+            served = self._served.setdefault(lane, {})
+            return sorted(candidates, key=lambda a: (served.get(a, 0), a))
+
+    def _served_now(self, lane: tuple[str, ...], account: int) -> None:
+        with self._turn_lock:
+            self._tick += 1
+            self._served.setdefault(lane, {})[account] = self._tick
+
     def claim(
         self,
         worker_id: str,
@@ -119,31 +136,49 @@ class JobStore:
         kinds: frozenset[JobKind] | None = None,
         exclude: frozenset[JobKind] = frozenset(),
     ) -> ClaimedJob | None:
-        """Next ready job of any account; `kinds`/`exclude` split the queue
-        between worker lanes. The caller runs the job in `ClaimedJob.account_id`."""
+        """Next ready job; `kinds`/`exclude` split the queue between worker lanes.
+
+        Fair across accounts: the highest priority present wins, and among the
+        accounts that have a ready job of that priority they take turns (the
+        one served longest ago in this lane goes first), so a long queue of
+        one account never holds back another's. The caller runs the job in
+        `ClaimedJob.account_id`."""
         now = self._now()
+        lane = (",".join(sorted(kinds)) if kinds else "*", ",".join(sorted(exclude)))
+
+        ready: list[ColumnElement[bool]] = [Job.status == "queued", Job.run_after <= now]
+        if kinds is not None:
+            ready.append(Job.kind.in_(sorted(kinds)))
+        if exclude:
+            ready.append(Job.kind.not_in(sorted(exclude)))
+
         with system_scope(), self.sf.begin() as s:
-            q = (
-                select(Job)
-                .where(Job.status == "queued", Job.run_after <= now)
-                .order_by(Job.priority.desc(), Job.id)
-                .limit(1)
-            )
-            if kinds is not None:
-                q = q.where(Job.kind.in_(sorted(kinds)))
-            if exclude:
-                q = q.where(Job.kind.not_in(sorted(exclude)))
-            if s.get_bind().dialect.name == "postgresql":
-                q = q.with_for_update(skip_locked=True)
-            job = s.scalars(q).first()
-            if job is None:
+            top = s.scalar(select(func.max(Job.priority)).where(*ready))
+            if top is None:
                 return None
-            job.status = "running"
-            job.attempts += 1
-            job.locked_at = now
-            job.locked_by = worker_id
-            return ClaimedJob(id=job.id, account_id=job.gmail_account_id, attempts=job.attempts,
-                              payload=_payload(job))
+            accounts = list(s.scalars(
+                select(Job.gmail_account_id).distinct().where(*ready, Job.priority == top)
+            ))
+            for account in self._next_account(lane, accounts):
+                q = (
+                    select(Job)
+                    .where(*ready, Job.priority == top, Job.gmail_account_id == account)
+                    .order_by(Job.id)
+                    .limit(1)
+                )
+                if s.get_bind().dialect.name == "postgresql":
+                    q = q.with_for_update(skip_locked=True)
+                job = s.scalars(q).first()
+                if job is None:  # taken by another worker meanwhile
+                    continue
+                job.status = "running"
+                job.attempts += 1
+                job.locked_at = now
+                job.locked_by = worker_id
+                self._served_now(lane, account)
+                return ClaimedJob(id=job.id, account_id=job.gmail_account_id,
+                                  attempts=job.attempts, payload=_payload(job))
+            return None
 
     def complete(self, job_id: int) -> None:
         with self.sf.begin() as s:
