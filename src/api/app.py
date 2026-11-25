@@ -141,6 +141,7 @@ def create_app(
     if api is not None:
         from src.api.google_entry import register_entry_callbacks
         from src.api.routes import (
+            account,
             actions,
             admin,
             admin_invites,
@@ -163,8 +164,8 @@ def create_app(
         register_entry_callbacks()
         app.state.deps = api
         app.add_middleware(AccountScopeMiddleware, resolve=account_resolver(api))
-        for module in (auth, entry, onboarding, admin_invites, admin, settings, mail, actions,
-                       documents, ops, security, agent, chat, gmail, oauth):
+        for module in (auth, entry, onboarding, admin_invites, admin, settings, account, mail,
+                       actions, documents, ops, security, agent, chat, gmail, oauth):
             app.include_router(module.router)
         from src.api.routes import llm_key
 
@@ -294,7 +295,7 @@ def build_app() -> FastAPI:
 
         api = ApiDeps.build(
             store.sf, load_auth_settings(), alerts=alerts, gmail=clients.getter(),
-            on_connected=on_connected,
+            on_connected=on_connected, clients=clients,
         )
     else:
         log("JWT_SECRET ausente: API do painel desligada (só webhook e /healthz)")

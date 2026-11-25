@@ -59,6 +59,8 @@ const SECURITY_KINDS: Record<string, SecurityKindInfo> = {
   totp_changed: { label: 'autenticador trocado', icon: 'keyround', tone: 'info' },
   sessions_revoked: { label: 'outras sessões encerradas', icon: 'logout', tone: 'neutral' },
   totp_reset: { label: '2FA resetado', icon: 'lock', tone: 'warning' },
+  account_deleted: { label: 'conta excluída', icon: 'ban', tone: 'warning' },
+  account_disconnected: { label: 'Gmail desconectado', icon: 'logout', tone: 'neutral' },
 }
 
 export function securityKind(kind: string): SecurityKindInfo {

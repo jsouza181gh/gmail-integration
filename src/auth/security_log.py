@@ -17,6 +17,7 @@ SecurityKind = Literal[
     "login_new_ip", "logout", "session_revoked", "csrf_invalid", "download", "unlock",
     "user_lock", "invite_created", "signup", "onboarding_done",
     "password_changed", "totp_changed", "sessions_revoked", "totp_reset",
+    "account_deleted", "account_disconnected",
 ]
 DETAIL_MAX = 1000
 

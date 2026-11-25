@@ -218,3 +218,13 @@ export const revokeInvite = (id: number) => request('DELETE', `/api/admin/invite
 export const resetTotp = (userId: number) => request('POST', `/api/admin/users/${userId}/reset-2fa`)
 export const platformEvents = () =>
   request('GET', '/api/admin/security/events', { schema: z.array(s.SecurityEvent) })
+// --- account (leaving) --------------------------------------------------
+export const account = () => request('GET', '/api/account', { schema: s.AccountInfo })
+export const disconnectGmail = () => request('POST', '/api/account/disconnect')
+export interface DeleteAccountBody {
+  email: string
+  password?: string
+  code?: string
+}
+export const deleteAccount = (body: DeleteAccountBody) =>
+  request('POST', '/api/account/delete', { body })

@@ -21,6 +21,7 @@ export const SYSTEM_ITEMS: NavItem[] = [
   { to: '/execucoes', label: 'Execuções', icon: 'activity' },
   { to: '/seguranca', label: 'Segurança', icon: 'shield' },
   { to: '/configuracoes', label: 'Configurações', icon: 'settings' },
+  { to: '/conta', label: 'Conta', icon: 'logout' },
 ]
 
 export const ADMIN_ITEM: NavItem = { to: '/admin', label: 'Administração', icon: 'users' }

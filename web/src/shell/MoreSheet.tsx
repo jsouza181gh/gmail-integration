@@ -10,6 +10,7 @@ const LINKS: Array<{ to: string; label: string; icon: IconName }> = [
   { to: '/execucoes', label: 'Execuções', icon: 'activity' },
   { to: '/seguranca', label: 'Segurança', icon: 'shield' },
   { to: '/configuracoes', label: 'Configurações', icon: 'settings' },
+  { to: '/conta', label: 'Conta', icon: 'logout' },
 ]
 
 const ADMIN_LINK = { to: '/admin', label: 'Administração', icon: 'users' } as const

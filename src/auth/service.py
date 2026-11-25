@@ -478,3 +478,21 @@ class AuthService:
             )
         self.log.record("totp_reset", None, f"2FA resetado pelo administrador #{by_admin}", user_id)
         return True
+
+    def confirm_identity(self, user_id: int, password: str | None, code: str | None, ip: str) -> bool:
+        """Re-ask for the password or a second-factor code before something
+        irreversible. A wrong answer counts as a login failure (same lockouts)."""
+        if self.check_open(ip) != "ok" or not (password or code):
+            return False
+        with self.sf.begin() as s:
+            user = s.get(User, user_id)
+            if user is None:
+                ok = False
+            elif password:  # a Google-only user has no password: only the code confirms
+                ok = user.password_hash is not None and verify_password(user.password_hash, password)
+            else:
+                ok = self._second_factor_ok(s, user, code or "")
+        if not ok:
+            self._fail(ip, "password" if password else "totp", "reconfirmação de identidade falhou",
+                       user_id)
+        return ok

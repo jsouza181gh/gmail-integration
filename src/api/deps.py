@@ -19,6 +19,7 @@ from src.auth.service import AuthService
 from src.chat.cards import CardService
 from src.chat.store import ChatStore
 from src.db.models import User
+from src.gmail.clients import GmailClients
 from src.indexing.store import IndexStore
 from src.jobs.store import JobStore
 from src.llm.accounts import KeyResolver
@@ -74,6 +75,7 @@ class ApiDeps:
         on_connected: Callable[[int], None] = _nothing_to_start,
         llm_keys: KeyResolver,
         key_validator: Callable[[str], str | None],
+        clients: GmailClients | None = None,
     ) -> None:
         self.sf = sf
         self.settings = settings
@@ -91,6 +93,7 @@ class ApiDeps:
         self.on_connected = on_connected  # account id: its Gmail was (re)connected
         self.llm_keys = llm_keys  # the account's Gemini keys (cached)
         self.key_validator = key_validator  # None = key works; text = what to tell the user
+        self.clients = clients  # fase 2: one Gmail service per account
 
     @classmethod
     def build(
@@ -104,6 +107,7 @@ class ApiDeps:
         stream: "StreamTiming | None" = None,
         on_connected: Callable[[int], None] = _nothing_to_start,
         key_validator: Callable[[str], str | None] = validate_key,
+        clients: GmailClients | None = None,
     ) -> "ApiDeps":
         log = SecurityLog(sf, alerts, clock)
         jobs = JobStore(sf)
@@ -136,6 +140,7 @@ class ApiDeps:
             on_connected=on_connected,
             llm_keys=KeyResolver(sf, env_keys=env_account_keys),
             key_validator=key_validator,
+            clients=clients,
         )
 
 

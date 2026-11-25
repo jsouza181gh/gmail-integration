@@ -481,3 +481,10 @@ export const AdminInvite = z
 export type AdminInvite = z.infer<typeof AdminInvite>
 
 export const InviteCreated = z.object({ link: str })
+export const AccountInfo = z.object({
+  email: str,
+  status: str,
+  can_delete: z.boolean(),
+  backup_copies: int,
+})
+export type AccountInfo = z.infer<typeof AccountInfo>
