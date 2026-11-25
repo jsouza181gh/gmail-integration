@@ -36,7 +36,8 @@ def test_full_login_flow_sets_cookie_flags(api: Api) -> None:
     assert all(f in refresh for f in ("HttpOnly", "Secure", "SameSite=strict", "Path=/api/auth"))
     assert "HttpOnly" not in csrf and "Secure" in csrf and "Path=/" in csrf
     assert c.get("/api/auth/me").json() == {
-        "username": "joao", "role": "admin", "onboarding_step": None, "onboarding_done": True,
+        "username": "joao", "role": "admin", "email": "joao@example.com", "onboarding_step": None,
+        "onboarding_done": True,
     }
 
 

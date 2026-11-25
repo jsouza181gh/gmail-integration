@@ -155,6 +155,13 @@ def require_user(request: Request) -> int:
     return user_id
 
 
+def optional_user(request: Request) -> int | None:
+    """The logged-in user, if any (for events recorded outside `require_user` routes)."""
+    deps = get_deps(request)
+    token = request.cookies.get(ACCESS_COOKIE)
+    return read_access(token, deps.settings, deps.clock()) if token else None
+
+
 def require_admin(request: Request, user_id: int = Depends(require_user)) -> int:
     with get_deps(request).sf() as s:
         user = s.get(User, user_id)

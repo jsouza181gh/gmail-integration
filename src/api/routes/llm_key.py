@@ -73,5 +73,5 @@ def post_llm_key(
     was_done = is_complete(deps.onboarding.state(user_id).step)
     step = deps.onboarding.finish_step(user_id, STEP)
     if not was_done and is_complete(step):
-        deps.log.record("onboarding_done", request_ip(request), f"usuário {user_id}")
+        deps.log.record("onboarding_done", request_ip(request), f"usuário {user_id}", user_id)
     return out.model_copy(update={"next_step": step})

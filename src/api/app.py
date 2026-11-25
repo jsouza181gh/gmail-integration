@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from src.api.deps import ApiDeps
@@ -24,6 +25,7 @@ from src.api.static import mount_web
 from src.auth.crypto import read_access
 from src.db.accounts import account_for_user
 from src.services.sync import SyncCoordinators
+from src.db.scope import ScopeError
 from src.utils.console import log
 
 
@@ -140,6 +142,7 @@ def create_app(
         from src.api.google_entry import register_entry_callbacks
         from src.api.routes import (
             actions,
+            admin,
             admin_invites,
             agent,
             auth,
@@ -152,6 +155,7 @@ def create_app(
             onboarding,
             ops,
             security,
+            settings,
         )
         from src.gmail.oauth import configure as configure_oauth
 
@@ -159,12 +163,20 @@ def create_app(
         register_entry_callbacks()
         app.state.deps = api
         app.add_middleware(AccountScopeMiddleware, resolve=account_resolver(api))
-        for module in (auth, entry, onboarding, admin_invites, mail, actions, documents, ops,
-                       security, agent, chat, gmail, oauth):
+        for module in (auth, entry, onboarding, admin_invites, admin, settings, mail, actions,
+                       documents, ops, security, agent, chat, gmail, oauth):
             app.include_router(module.router)
         from src.api.routes import llm_key
 
         app.include_router(llm_key.router)
+
+        @app.exception_handler(ScopeError)
+        def no_account(request: Request, exc: ScopeError) -> JSONResponse:
+            # a logged-in user with no Gmail account yet: send them to onboarding
+            return JSONResponse(
+                {"detail": "Conecte seu Gmail para continuar.", "code": "no_account"},
+                status_code=409,
+            )
 
     @app.post("/webhooks/gmail")
     async def gmail_webhook(request: Request, background: BackgroundTasks) -> Response:

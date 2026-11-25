@@ -9,7 +9,7 @@ The whole order lives here, so no step can be left without a way forward:
 Steps: `gmail` (done by the Google consent itself, so signup starts at
 `totp`), `totp` (secret, first code, recovery codes shown),
 `password_optional`, `llm_key` (the user's Gemini key, src/api/routes/llm_key.py),
-`done`.
+`finish` (what happens now + optional backfill, src/accounts/finish.py), `done`.
 """
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -29,7 +29,7 @@ from src.auth.enroll import (
 from src.db.models import RecoveryCode, User
 from src.llm.types import Schema
 
-ONBOARDING_STEPS: list[str] = ["gmail", "totp", "password_optional", "llm_key", "done"]
+ONBOARDING_STEPS: list[str] = ["gmail", "totp", "password_optional", "llm_key", "finish", "done"]
 FIRST_STEP_AFTER_SIGNUP = "totp"  # the Google consent connected the Gmail already
 
 

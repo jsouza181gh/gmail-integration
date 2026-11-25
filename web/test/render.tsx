@@ -18,9 +18,9 @@ export const noContent = () => new HttpResponse(null, { status: 204 })
 export const unauthorized = () => new HttpResponse(null, { status: 401 })
 
 /** Session is valid and `n` actions are pending. */
-export function signedIn(pending: JsonBody = []) {
+export function signedIn(pending: JsonBody = [], role: 'admin' | 'member' = 'admin') {
   server.use(
-    http.get('/api/auth/me', () => json({ username: 'joao' })),
+    http.get('/api/auth/me', () => json({ username: 'joao', role })),
     http.get('/api/actions', () => json(pending)),
   )
 }

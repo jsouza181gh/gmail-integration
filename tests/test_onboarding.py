@@ -21,7 +21,7 @@ NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
 
 
 def test_steps_are_the_contract_and_extensible() -> None:
-    assert ONBOARDING_STEPS == ["gmail", "totp", "password_optional", "llm_key", "done"]
+    assert ONBOARDING_STEPS == ["gmail", "totp", "password_optional", "llm_key", "finish", "done"]
     assert is_complete(None) and is_complete(ONBOARDING_STEPS[-1])
     assert not is_complete("totp") and not is_complete("password_optional")
     assert needs_enrollment("gmail") and needs_enrollment("totp")
@@ -143,5 +143,5 @@ def test_finishing_a_step_advances_only_from_that_step(
     assert ob.finish_step(5, "llm_key") == "totp"  # not on it yet: nothing moves
     with session_factory.begin() as s:
         s.get_one(User, 5).onboarding_step = "llm_key"
-    assert ob.finish_step(5, "llm_key") == "done"
-    assert ob.finish_step(5, "llm_key") == "done"  # a later key change keeps it done
+    assert ob.finish_step(5, "llm_key") == "finish"
+    assert ob.finish_step(5, "llm_key") == "finish"  # a later key change does not move it again

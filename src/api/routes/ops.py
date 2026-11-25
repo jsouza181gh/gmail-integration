@@ -186,7 +186,7 @@ def _has_separate_key(deps: ApiDeps) -> bool:
         return False
 
 
-def _start(deps: ApiDeps) -> None:
+def start_backfill(deps: ApiDeps) -> None:
     try:
         deps.llm_keys.keys(current_account())
     except NoLLMKeyError as exc:  # the history needs the user's own Gemini key
@@ -199,7 +199,7 @@ def _start(deps: ApiDeps) -> None:
 @router.post("/backfill/start")
 def backfill_start(request: Request) -> BackfillStatus:
     deps = get_deps(request)
-    _start(deps)
+    start_backfill(deps)
     return _status(deps)
 
 
@@ -230,7 +230,7 @@ def backfill_resume(request: Request) -> BackfillStatus:
                    Job.last_error == PAUSED_REASON)
             .values(run_after=deps.clock(), last_error=None)
         )
-    _start(deps)
+    start_backfill(deps)
     return _status(deps)
 
 

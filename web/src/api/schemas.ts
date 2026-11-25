@@ -301,6 +301,7 @@ export type GmailStatus = z.infer<typeof GmailStatus>
 export const Me = z.object({
   username: str,
   role: str.default('member'),
+  email: strN.default(null),
   onboarding_step: strN.default(null),
   onboarding_done: z.boolean().default(true),
 })
@@ -409,3 +410,74 @@ export type ChatMessage = z.infer<typeof ChatMessage>
 
 export const Turn = z.object({ user: ChatMessage, assistant: ChatMessage })
 export type Turn = z.infer<typeof Turn>
+
+// --- settings, warnings, admin (src/api/routes/settings.py, admin.py) -------------
+export const KeysStatus = z.object({
+  configured: z.boolean(),
+  has_backfill_key: z.boolean(),
+  validated_at: strN,
+  last_error: strN,
+})
+export type KeysStatus = z.infer<typeof KeysStatus>
+
+export const Settings = z.object({
+  username: str,
+  email: strN,
+  role: str,
+  has_password: z.boolean(),
+  has_totp: z.boolean(),
+  gmail_email: strN,
+  llm_keys: KeysStatus,
+})
+export type Settings = z.infer<typeof Settings>
+
+export const WarningKind = z.enum([
+  'no_gmail',
+  'gmail_revoked',
+  'gmail_disconnected',
+  'key_missing',
+  'key_invalid',
+])
+export type WarningKind = z.infer<typeof WarningKind>
+export const Warning = z.object({ kind: WarningKind })
+export type Warning = z.infer<typeof Warning>
+
+export const NewTotp = z.object({
+  otpauth_uri: str,
+  secret: str,
+  recovery_codes: z.array(str),
+})
+export type NewTotp = z.infer<typeof NewTotp>
+
+export const Ended = z.object({ ended: int })
+export const FinishOut = z.object({ backfill_started: z.boolean() })
+
+export const AdminAccount = z.object({
+  user_id: int,
+  email: str,
+  role: str,
+  status: str,
+  last_sync_at: strN,
+  watch_expires_at: strN,
+  error_kind: z.enum(['revoked', 'quota', 'network', 'other']).nullable(),
+  queue_depth: int,
+  dead_jobs: int,
+  key_ok: z.boolean().nullable(),
+})
+export type AdminAccount = z.infer<typeof AdminAccount>
+
+// The server's `status` (open | accepted | revoked) as the panel's `state`.
+export const AdminInvite = z
+  .object({
+    id: int,
+    email: str,
+    status: z.enum(['open', 'accepted', 'revoked']),
+    created_at: str,
+  })
+  .transform(({ status, ...rest }) => ({
+    ...rest,
+    state: status === 'open' ? ('pending' as const) : status,
+  }))
+export type AdminInvite = z.infer<typeof AdminInvite>
+
+export const InviteCreated = z.object({ link: str })

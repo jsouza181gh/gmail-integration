@@ -25,10 +25,16 @@ const NO_REFRESH = new Set(['/api/auth/login', '/api/auth/2fa', '/api/auth/refre
 const WRITES = new Set<Method>(['POST', 'PUT', 'DELETE'])
 
 let sessionLost: () => void = () => {}
+let noAccount: () => void = () => {}
 let refreshing: Promise<boolean> | null = null
 
 export function onSessionLost(cb: () => void): void {
   sessionLost = cb
+}
+
+/** The user is logged in but has no Gmail account yet (server answers 409 `no_account`). */
+export function onNoAccount(cb: () => void): void {
+  noAccount = cb
 }
 
 function csrfToken(): string | null {
@@ -83,7 +89,9 @@ function refreshOnce(): Promise<boolean> {
 
 async function errorFrom(res: Response): Promise<ApiError> {
   if (res.status === 429) return new ApiError(429, RATE_LIMITED)
-  const parsed = z.object({ detail: z.string() }).safeParse(await res.json().catch(() => null))
+  const body: unknown = await res.json().catch(() => null)
+  if (res.status === 409 && z.object({ code: z.literal('no_account') }).safeParse(body).success) noAccount()
+  const parsed = z.object({ detail: z.string() }).safeParse(body)
   return new ApiError(res.status, parsed.success ? parsed.data.detail : fallbackDetail(res.status))
 }
 

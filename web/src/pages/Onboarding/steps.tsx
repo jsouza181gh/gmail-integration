@@ -6,6 +6,7 @@ import type { OnboardingState } from '../../api/schemas'
 import { GmailStep } from './GmailStep'
 import { LlmKeyForm } from './LlmKey'
 import { PasswordStep } from './PasswordStep'
+import { FinishStep } from './Pronto'
 import { TotpStep } from './TotpStep'
 
 export interface StepProps {
@@ -25,4 +26,5 @@ export const STEP_PAGES: Record<string, StepInfo> = {
   totp: { label: 'Proteção da conta', Page: TotpStep },
   password_optional: { label: 'Senha (opcional)', Page: PasswordStep },
   llm_key: { label: 'Chave do Gemini', Page: ({ onAdvance }) => <LlmKeyForm onContinue={onAdvance} /> },
+  finish: { label: 'Pronto', Page: FinishStep },
 }

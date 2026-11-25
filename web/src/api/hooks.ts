@@ -1,5 +1,5 @@
 import { QueryClient, useQuery } from '@tanstack/react-query'
-import { backfill, listActions, me } from './endpoints'
+import { backfill, listActions, me, warnings } from './endpoints'
 import { ApiError } from './errors'
 
 export function makeQueryClient(): QueryClient {
@@ -20,6 +20,7 @@ export const qk = {
   me: ['me'] as const,
   pending: ['actions', 'pending'] as const,
   backfill: ['backfill'] as const,
+  warnings: ['warnings'] as const,
 }
 
 export function useMe() {
@@ -41,4 +42,8 @@ export function useBackfill(opts: { enabled?: boolean; poll?: boolean } = {}) {
     enabled: opts.enabled ?? true,
     refetchInterval: opts.poll ? 15_000 : false,
   })
+}
+
+export function useWarnings() {
+  return useQuery({ queryKey: qk.warnings, queryFn: warnings, retry: false })
 }

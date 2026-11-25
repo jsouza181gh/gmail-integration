@@ -669,6 +669,8 @@ class SecurityEvent(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     ip: Mapped[str | None] = mapped_column(String(64))
     detail: Mapped[str] = mapped_column(Text, nullable=False)
+    # who the event is about; NULL = platform-wide (IP blocks, global lock), admin only
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

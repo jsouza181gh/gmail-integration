@@ -195,3 +195,26 @@ export const confirmCard = (cardId: number, opts: ConfirmOptions = {}) =>
 export const cancelCard = (cardId: number) =>
   request('POST', `/api/chat/cards/${cardId}/cancel`, { schema: s.ChatCard })
 export const messageAudioUrl = (messageId: number) => `/api/chat/messages/${messageId}/audio`
+
+// --- settings, warnings, onboarding step 6 -------------------------------------
+export const settings = () => request('GET', '/api/settings', { schema: s.Settings })
+export const replaceLlmKeys = (body: { app_key?: string; backfill_key?: string; drop_backfill?: boolean }) =>
+  request('PUT', '/api/settings/llm-keys', { body, schema: s.KeysStatus })
+export const changePassword = (current_password: string, new_password: string) =>
+  request('POST', '/api/auth/password', { body: { current_password, new_password } })
+export const changeTotp = (password: string, code: string) =>
+  request('POST', '/api/auth/totp', { body: { password, code }, schema: s.NewTotp })
+export const signOutOthers = () => request('DELETE', '/api/auth/sessions', { schema: s.Ended })
+export const warnings = () => request('GET', '/api/warnings', { schema: z.array(s.Warning) })
+export const finishOnboarding = (backfill: boolean) =>
+  request('POST', '/api/onboarding/finish', { body: { backfill }, schema: s.FinishOut })
+
+// --- admin ---------------------------------------------------------------------
+export const adminAccounts = () => request('GET', '/api/admin/accounts', { schema: z.array(s.AdminAccount) })
+export const adminInvites = () => request('GET', '/api/admin/invites', { schema: z.array(s.AdminInvite) })
+export const createInvite = (email: string) =>
+  request('POST', '/api/admin/invites', { body: { email }, schema: s.InviteCreated })
+export const revokeInvite = (id: number) => request('DELETE', `/api/admin/invites/${id}`)
+export const resetTotp = (userId: number) => request('POST', `/api/admin/users/${userId}/reset-2fa`)
+export const platformEvents = () =>
+  request('GET', '/api/admin/security/events', { schema: z.array(s.SecurityEvent) })

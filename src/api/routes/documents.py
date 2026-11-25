@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import or_, select
 
 from src.api import queries
-from src.api.deps import get_deps, request_ip, require_user
+from src.api.deps import get_deps, optional_user, request_ip, require_user
 from src.auth.crypto import issue_download, read_download
 from src.db.models import Attachment, Email
 from src.gmail.full import fetch_attachment
@@ -76,7 +76,8 @@ def download(attachment_id: int, request: Request, t: str = "") -> Response:
         data = fetch_attachment(deps.gmail(), row.email_id, row.part_id)
     except LookupError as exc:
         raise HTTPException(410, "o e-mail ou o anexo não existe mais no Gmail") from exc
-    deps.log.record("download", request_ip(request), f"anexo #{row.id} {row.filename[:200]}")
+    deps.log.record("download", request_ip(request), f"anexo #{row.id} {row.filename[:200]}",
+                    optional_user(request))
     return Response(
         content=data,
         media_type=row.mime_type,

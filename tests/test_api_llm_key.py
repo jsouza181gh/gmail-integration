@@ -93,9 +93,9 @@ def test_a_working_key_moves_the_onboarding_on(
     with session_factory.begin() as s:
         s.get_one(User, 1).onboarding_step = "llm_key"
     body = api.client.post("/api/onboarding/llm-key", json={"app_key": "good"}).json()
-    assert body["next_step"] == "done"
+    assert body["next_step"] == "finish"
     with session_factory() as s:
-        assert s.get_one(User, 1).onboarding_step == "done"
+        assert s.get_one(User, 1).onboarding_step == "finish"
 
 
 def test_a_rejected_key_keeps_the_user_on_the_step(

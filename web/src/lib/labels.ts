@@ -55,6 +55,10 @@ const SECURITY_KINDS: Record<string, SecurityKindInfo> = {
   csrf_invalid: { label: 'CSRF recusado', icon: 'ban', tone: 'danger' },
   download: { label: 'download', icon: 'download', tone: 'info' },
   unlock: { label: 'desbloqueio', icon: 'lock', tone: 'neutral' },
+  password_changed: { label: 'senha trocada', icon: 'keyround', tone: 'info' },
+  totp_changed: { label: 'autenticador trocado', icon: 'keyround', tone: 'info' },
+  sessions_revoked: { label: 'outras sessões encerradas', icon: 'logout', tone: 'neutral' },
+  totp_reset: { label: '2FA resetado', icon: 'lock', tone: 'warning' },
 }
 
 export function securityKind(kind: string): SecurityKindInfo {

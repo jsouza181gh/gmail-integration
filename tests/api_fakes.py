@@ -52,11 +52,11 @@ class Api:
         self.secret = secret_of(enrollment)
         self.recovery = enrollment.recovery_codes
         self.deps = ApiDeps.build(sf, SETTINGS, alerts=self.alerts, clock=self.clock, **deps_kw)  # type: ignore[arg-type]
-        self.client = TestClient(
-            create_app(trigger=lambda: None, token=None, api=self.deps),
-            base_url="https://testserver",
-            headers={"Origin": ORIGIN},
-        )
+        self.app = create_app(trigger=lambda: None, token=None, api=self.deps)
+        self.client = self.new_client()
+
+    def new_client(self) -> TestClient:
+        return TestClient(self.app, base_url="https://testserver", headers={"Origin": ORIGIN})
 
     def code(self) -> str:
         return pyotp.TOTP(self.secret).at(self.clock())

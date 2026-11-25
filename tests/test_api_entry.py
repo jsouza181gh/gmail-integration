@@ -230,7 +230,8 @@ def test_signup_creates_user_and_account_then_onboarding_walks_to_done(
     api.deps.key_validator = lambda key: None  # never Google from a test
     monkeypatch.setenv("APP_SECRET", SETTINGS.app_secret)  # the key is stored sealed
     r = c.post("/api/onboarding/llm-key", json={"app_key": "AIza-good"})
-    assert r.status_code == 200 and r.json()["next_step"] == "done"
+    assert r.status_code == 200 and r.json()["next_step"] == "finish"
+    assert c.post("/api/onboarding/finish", json={"backfill": False}).status_code == 200
     me = c.get("/api/auth/me").json()
     assert me["onboarding_done"] is True
     with session_factory() as s:

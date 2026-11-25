@@ -117,4 +117,4 @@ def password_skip(request: Request, user_id: int = Depends(onboarding_user)) -> 
 
 def _finished(request: Request, user_id: int, step: str) -> None:
     if is_complete(step):
-        get_deps(request).log.record("onboarding_done", request_ip(request), f"usuário {user_id}")
+        get_deps(request).log.record("onboarding_done", request_ip(request), f"usuário {user_id}", user_id)
